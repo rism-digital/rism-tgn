@@ -165,7 +165,7 @@ ranked_terms AS (
           SELECT 1
           FROM tgn.place_type_rels ptr
           WHERE ptr.subject_id = st.subject_id
-            AND ptr.place_type_id IN (83002, 81010, 84251, 82411)
+            AND ptr.place_type_id IN (83002, 81010, 84251, 82411, 81115, 81175, 81161)
       )
 ),
 subject_best AS (
