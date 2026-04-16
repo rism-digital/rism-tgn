@@ -14,6 +14,7 @@ type PlaceMatch struct {
 	Lat            *float64        `json:"lat,omitempty"`
 	Lon            *float64        `json:"lon,omitempty"`
 	AncestorPairs  json.RawMessage `json:"ancestor_pairs"`
+	AlternateNames json.RawMessage `json:"alternate_names"`
 }
 
 // Repository provides read-only place lookup operations.

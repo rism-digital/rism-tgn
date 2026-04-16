@@ -52,7 +52,8 @@ RETURNS TABLE (
     parent_subject_id bigint,
     lat double precision,
     lon double precision,
-    ancestor_pairs jsonb
+    ancestor_pairs jsonb,
+    alternate_names jsonb
 )
 LANGUAGE sql
 STABLE
@@ -160,6 +161,12 @@ ranked_terms AS (
     JOIN tgn.search_term st
         ON st.term_id = rth.term_id
     WHERE rth.term_rn = 1
+      AND EXISTS (
+          SELECT 1
+          FROM tgn.place_type_rels ptr
+          WHERE ptr.subject_id = st.subject_id
+            AND ptr.place_type_id IN (83002, 81010)
+      )
 ),
 subject_best AS (
     SELECT
@@ -279,8 +286,22 @@ SELECT
     bm.parent_subject_id,
     bm.lat,
     bm.lon,
-    bm.ancestor_pairs
+    bm.ancestor_pairs,
+    COALESCE(alt.alternate_names, '[]'::jsonb) AS alternate_names
 FROM best_matches bm
+LEFT JOIN LATERAL (
+    SELECT jsonb_agg(name.term_text ORDER BY name.sort_group, name.display_order, name.term_id) AS alternate_names
+    FROM (
+        SELECT DISTINCT ON (t.term_text)
+            t.term_text,
+            CASE WHEN btrim(COALESCE(t.term_type, '')) = 'P' THEN 0 ELSE 1 END AS sort_group,
+            t.display_order,
+            t.term_id
+        FROM tgn.term t
+        WHERE t.subject_id = bm.tgn_id
+        ORDER BY t.term_text, sort_group, t.display_order NULLS LAST, t.term_id
+    ) name
+) alt ON TRUE
 ORDER BY
     bm.rank_term_exact DESC,
     bm.rank_pref_exact DESC,
@@ -304,7 +325,8 @@ RETURNS TABLE (
     parent_subject_id bigint,
     lat double precision,
     lon double precision,
-    ancestor_pairs jsonb
+    ancestor_pairs jsonb,
+    alternate_names jsonb
 )
 LANGUAGE sql
 STABLE
@@ -505,12 +527,26 @@ SELECT
             )
         ),
         '[]'::jsonb
-    ) AS ancestor_pairs
+    ) AS ancestor_pairs,
+    COALESCE(alt.alternate_names, '[]'::jsonb) AS alternate_names
 FROM base b
 LEFT JOIN terms tr ON tr.tgn_id = b.tgn_id
 LEFT JOIN place_type_map pt ON pt.subject_id = b.tgn_id
 LEFT JOIN parent_map pm ON TRUE
 LEFT JOIN coord_map cm ON TRUE
 LEFT JOIN ancestor_agg aa ON aa.tgn_id = b.tgn_id
+LEFT JOIN LATERAL (
+    SELECT jsonb_agg(name.term_text ORDER BY name.sort_group, name.display_order, name.term_id) AS alternate_names
+    FROM (
+        SELECT DISTINCT ON (t.term_text)
+            t.term_text,
+            CASE WHEN btrim(COALESCE(t.term_type, '')) = 'P' THEN 0 ELSE 1 END AS sort_group,
+            t.display_order,
+            t.term_id
+        FROM tgn.term t
+        WHERE t.subject_id = b.tgn_id
+        ORDER BY t.term_text, sort_group, t.display_order NULLS LAST, t.term_id
+    ) name
+) alt ON TRUE
 WHERE EXISTS (SELECT 1 FROM tgn.subject s WHERE s.subject_id = b.tgn_id);
 $$;

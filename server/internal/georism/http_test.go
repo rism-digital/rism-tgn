@@ -63,7 +63,12 @@ func TestHandlerSearchSuccessWithTrailingSlash(t *testing.T) {
 
 func TestHandlerIDSuccess(t *testing.T) {
 	id := int64(7003746)
-	h := NewHandler(&fakeRepo{idResult: &PlaceMatch{TGNID: id, MatchedTerm: "Genf", PreferredTerm: "Genf"}})
+	h := NewHandler(&fakeRepo{idResult: &PlaceMatch{
+		TGNID:          id,
+		MatchedTerm:    "Genf",
+		PreferredTerm:  "Genf",
+		AlternateNames: json.RawMessage(`["Genf","Geneva","Genève"]`),
+	}})
 	req := httptest.NewRequest(http.MethodGet, "/places/7003746", nil)
 	w := httptest.NewRecorder()
 
@@ -82,6 +87,10 @@ func TestHandlerIDSuccess(t *testing.T) {
 	}
 	if got["tgn_id"].(float64) != float64(id) {
 		t.Fatalf("expected tgn_id %d, got %v", id, got["tgn_id"])
+	}
+	altNames, ok := got["alternate_names"].([]any)
+	if !ok || len(altNames) != 3 {
+		t.Fatalf("expected alternate_names array, got %v", got["alternate_names"])
 	}
 }
 

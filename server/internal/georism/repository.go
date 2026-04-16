@@ -33,7 +33,8 @@ SELECT
 	parent_subject_id,
 	lat,
 	lon,
-	ancestor_pairs
+	ancestor_pairs,
+	alternate_names
 FROM tgn.match_place_name($1, NULL, NULL, $2)
 ORDER BY score DESC, preferred_term, tgn_id
 `, query, limit)
@@ -68,7 +69,8 @@ SELECT
 	parent_subject_id,
 	lat,
 	lon,
-	ancestor_pairs
+	ancestor_pairs,
+	alternate_names
 FROM tgn.get_place_by_id($1)
 `, id)
 
@@ -95,6 +97,7 @@ func scanPlaceMatch(s scanner) (PlaceMatch, error) {
 	var lat sql.NullFloat64
 	var lon sql.NullFloat64
 	var ancestorPairs []byte
+	var alternateNames []byte
 
 	err := s.Scan(
 		&item.TGNID,
@@ -107,6 +110,7 @@ func scanPlaceMatch(s scanner) (PlaceMatch, error) {
 		&lat,
 		&lon,
 		&ancestorPairs,
+		&alternateNames,
 	)
 	if err != nil {
 		return PlaceMatch{}, err
@@ -123,6 +127,11 @@ func scanPlaceMatch(s scanner) (PlaceMatch, error) {
 		item.AncestorPairs = json.RawMessage("[]")
 	} else {
 		item.AncestorPairs = ancestorPairs
+	}
+	if len(alternateNames) == 0 {
+		item.AlternateNames = json.RawMessage("[]")
+	} else {
+		item.AlternateNames = alternateNames
 	}
 
 	return item, nil
