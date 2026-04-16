@@ -58,7 +58,7 @@ RETURNS TABLE (
 LANGUAGE sql
 STABLE
 AS $$
-WITH input AS (
+WITH RECURSIVE input AS (
     SELECT
         lower(unaccent(trim(in_name))) AS q,
         trim(regexp_replace(lower(unaccent(trim(in_name))), '[^a-z0-9]+', ' ', 'g')) AS q_clean
@@ -165,7 +165,7 @@ ranked_terms AS (
           SELECT 1
           FROM tgn.place_type_rels ptr
           WHERE ptr.subject_id = st.subject_id
-            AND ptr.place_type_id IN (83002, 81010)
+            AND ptr.place_type_id IN (83002, 81010, 84251, 82411)
       )
 ),
 subject_best AS (
@@ -275,6 +275,119 @@ best_matches AS (
         preferred_term,
         tgn_id
     LIMIT GREATEST(COALESCE(limit_n, 10), 1)
+),
+ancestors AS (
+    SELECT
+        bm.tgn_id,
+        p.parent_subject_id AS ancestor_id,
+        1 AS depth,
+        ARRAY[bm.tgn_id, p.parent_subject_id]::bigint[] AS path
+    FROM best_matches bm
+    JOIN LATERAL (
+        SELECT sr.parent_subject_id
+        FROM tgn.subject_rels sr
+        WHERE sr.child_subject_id = bm.tgn_id
+          AND sr.parent_subject_id IS NOT NULL
+        ORDER BY
+            CASE WHEN btrim(COALESCE(sr.historic_flag, '')) = 'H' THEN 1 ELSE 0 END,
+            CASE WHEN btrim(COALESCE(sr.hierarchy_flag, '')) = 'P' THEN 0 ELSE 1 END,
+            CASE WHEN btrim(COALESCE(sr.preferred_flag, '')) = 'P' THEN 0 ELSE 1 END,
+            sr.subject_rel_id
+        LIMIT 1
+    ) p ON TRUE
+    WHERE p.parent_subject_id IS NOT NULL
+      AND p.parent_subject_id <> 7029392
+
+    UNION ALL
+
+    SELECT
+        a.tgn_id,
+        p.parent_subject_id AS ancestor_id,
+        a.depth + 1 AS depth,
+        a.path || p.parent_subject_id
+    FROM ancestors a
+    JOIN LATERAL (
+        SELECT sr.parent_subject_id
+        FROM tgn.subject_rels sr
+        WHERE sr.child_subject_id = a.ancestor_id
+          AND sr.parent_subject_id IS NOT NULL
+        ORDER BY
+            CASE WHEN btrim(COALESCE(sr.historic_flag, '')) = 'H' THEN 1 ELSE 0 END,
+            CASE WHEN btrim(COALESCE(sr.hierarchy_flag, '')) = 'P' THEN 0 ELSE 1 END,
+            CASE WHEN btrim(COALESCE(sr.preferred_flag, '')) = 'P' THEN 0 ELSE 1 END,
+            sr.subject_rel_id
+        LIMIT 1
+    ) p ON TRUE
+    WHERE p.parent_subject_id IS NOT NULL
+      AND a.depth < 50
+      AND p.parent_subject_id <> 7029392
+      AND NOT (p.parent_subject_id = ANY(a.path))
+),
+ancestor_dedup AS (
+    SELECT
+        tgn_id,
+        ancestor_id,
+        MIN(depth) AS min_depth
+    FROM ancestors
+    GROUP BY tgn_id, ancestor_id
+),
+ancestor_named AS (
+    SELECT
+        ad.tgn_id,
+        ad.ancestor_id,
+        ad.min_depth,
+        pt.term_text AS ancestor_name,
+        apt.place_type_id AS ancestor_place_type_id,
+        apt.place_type_label AS ancestor_place_type_label
+    FROM ancestor_dedup ad
+    LEFT JOIN LATERAL (
+        SELECT t.term_text
+        FROM tgn.term t
+        WHERE t.subject_id = ad.ancestor_id
+        ORDER BY
+            CASE WHEN btrim(COALESCE(t.term_type, '')) = 'P' THEN 0 ELSE 1 END,
+            t.display_order NULLS LAST,
+            t.term_id
+        LIMIT 1
+    ) pt ON TRUE
+    LEFT JOIN LATERAL (
+        SELECT
+            r.place_type_id,
+            ptt.place_type_label
+        FROM tgn.place_type_rels r
+        LEFT JOIN tgn.place_type ptt
+            ON ptt.place_type_id = r.place_type_id
+        WHERE r.subject_id = ad.ancestor_id
+        ORDER BY
+            CASE WHEN btrim(COALESCE(r.preferred_flag, '')) = 'P' THEN 0 ELSE 1 END,
+            r.rel_order NULLS LAST,
+            r.place_type_id
+        LIMIT 1
+    ) apt ON TRUE
+),
+ancestor_ranked AS (
+    SELECT
+        tgn_id,
+        ancestor_id,
+        min_depth,
+        ancestor_name,
+        ancestor_place_type_id,
+        ancestor_place_type_label,
+        ROW_NUMBER() OVER (
+            PARTITION BY tgn_id
+            ORDER BY min_depth, ancestor_id
+        ) AS rn
+    FROM ancestor_named
+),
+ancestor_agg AS (
+    SELECT
+        tgn_id,
+        ARRAY_AGG(ancestor_id ORDER BY min_depth, ancestor_id) AS ancestor_ids,
+        ARRAY_AGG(COALESCE(ancestor_name, ancestor_id::text) ORDER BY min_depth, ancestor_id) AS ancestor_names,
+        ARRAY_AGG(ancestor_place_type_id ORDER BY min_depth, ancestor_id) AS ancestor_place_type_ids,
+        ARRAY_AGG(ancestor_place_type_label ORDER BY min_depth, ancestor_id) AS ancestor_place_type_labels
+    FROM ancestor_ranked
+    GROUP BY tgn_id
 )
 SELECT
     bm.tgn_id,
@@ -286,9 +399,69 @@ SELECT
     bm.parent_subject_id,
     bm.lat,
     bm.lon,
-    bm.ancestor_pairs,
+    COALESCE(
+        (
+            WITH trimmed AS (
+                SELECT
+                    COALESCE(
+                        CASE
+                            WHEN aa.ancestor_ids IS NULL THEN ARRAY[]::bigint[]
+                            WHEN array_position(aa.ancestor_ids, 7029392) IS NULL THEN aa.ancestor_ids
+                            WHEN array_position(aa.ancestor_ids, 7029392) = 1 THEN ARRAY[]::bigint[]
+                            ELSE aa.ancestor_ids[1:array_position(aa.ancestor_ids, 7029392)-1]
+                        END,
+                        ARRAY[]::bigint[]
+                    ) AS ids,
+                    COALESCE(
+                        CASE
+                            WHEN aa.ancestor_names IS NULL THEN ARRAY[]::text[]
+                            WHEN array_position(aa.ancestor_ids, 7029392) IS NULL THEN aa.ancestor_names
+                            WHEN array_position(aa.ancestor_ids, 7029392) = 1 THEN ARRAY[]::text[]
+                            ELSE aa.ancestor_names[1:array_position(aa.ancestor_ids, 7029392)-1]
+                        END,
+                        ARRAY[]::text[]
+                    ) AS names,
+                    COALESCE(
+                        CASE
+                            WHEN aa.ancestor_place_type_ids IS NULL THEN ARRAY[]::bigint[]
+                            WHEN array_position(aa.ancestor_ids, 7029392) IS NULL THEN aa.ancestor_place_type_ids
+                            WHEN array_position(aa.ancestor_ids, 7029392) = 1 THEN ARRAY[]::bigint[]
+                            ELSE aa.ancestor_place_type_ids[1:array_position(aa.ancestor_ids, 7029392)-1]
+                        END,
+                        ARRAY[]::bigint[]
+                    ) AS place_type_ids,
+                    COALESCE(
+                        CASE
+                            WHEN aa.ancestor_place_type_labels IS NULL THEN ARRAY[]::text[]
+                            WHEN array_position(aa.ancestor_ids, 7029392) IS NULL THEN aa.ancestor_place_type_labels
+                            WHEN array_position(aa.ancestor_ids, 7029392) = 1 THEN ARRAY[]::text[]
+                            ELSE aa.ancestor_place_type_labels[1:array_position(aa.ancestor_ids, 7029392)-1]
+                        END,
+                        ARRAY[]::text[]
+                    ) AS place_type_labels
+            )
+            SELECT COALESCE(
+                (
+                    SELECT jsonb_agg(
+                        jsonb_build_array(
+                            ids[idx],
+                            names[idx],
+                            place_type_ids[idx],
+                            place_type_labels[idx]
+                        )
+                        ORDER BY idx
+                    )
+                    FROM trimmed, generate_subscripts(trimmed.ids, 1) AS idx
+                ),
+                '[]'::jsonb
+            )
+        ),
+        '[]'::jsonb
+    ) AS ancestor_pairs,
     COALESCE(alt.alternate_names, '[]'::jsonb) AS alternate_names
 FROM best_matches bm
+LEFT JOIN ancestor_agg aa
+    ON aa.tgn_id = bm.tgn_id
 LEFT JOIN LATERAL (
     SELECT jsonb_agg(name.term_text ORDER BY name.sort_group, name.display_order, name.term_id) AS alternate_names
     FROM (
@@ -455,7 +628,9 @@ ancestor_named AS (
         ad.tgn_id,
         ad.ancestor_id,
         ad.min_depth,
-        name.term_text AS ancestor_name
+        name.term_text AS ancestor_name,
+        apt.place_type_id AS ancestor_place_type_id,
+        apt.place_type_label AS ancestor_place_type_label
     FROM ancestor_dedup ad
     LEFT JOIN LATERAL (
         SELECT t.term_text
@@ -467,12 +642,28 @@ ancestor_named AS (
             t.term_id
         LIMIT 1
     ) name ON TRUE
+    LEFT JOIN LATERAL (
+        SELECT
+            r.place_type_id,
+            pt.place_type_label
+        FROM tgn.place_type_rels r
+        LEFT JOIN tgn.place_type pt
+            ON pt.place_type_id = r.place_type_id
+        WHERE r.subject_id = ad.ancestor_id
+        ORDER BY
+            CASE WHEN btrim(COALESCE(r.preferred_flag, '')) = 'P' THEN 0 ELSE 1 END,
+            r.rel_order NULLS LAST,
+            r.place_type_id
+        LIMIT 1
+    ) apt ON TRUE
 ),
 ancestor_ranked AS (
     SELECT
         tgn_id,
         ancestor_id,
         ancestor_name,
+        ancestor_place_type_id,
+        ancestor_place_type_label,
         min_depth,
         ROW_NUMBER() OVER (PARTITION BY tgn_id ORDER BY min_depth, ancestor_id) AS rn
     FROM ancestor_named
@@ -481,7 +672,9 @@ ancestor_agg AS (
     SELECT
         tgn_id,
         ARRAY_AGG(ancestor_id ORDER BY min_depth, ancestor_id) AS ancestor_ids,
-        ARRAY_AGG(COALESCE(ancestor_name, ancestor_id::text) ORDER BY min_depth, ancestor_id) AS ancestor_names
+        ARRAY_AGG(COALESCE(ancestor_name, ancestor_id::text) ORDER BY min_depth, ancestor_id) AS ancestor_names,
+        ARRAY_AGG(ancestor_place_type_id ORDER BY min_depth, ancestor_id) AS ancestor_place_type_ids,
+        ARRAY_AGG(ancestor_place_type_label ORDER BY min_depth, ancestor_id) AS ancestor_place_type_labels
     FROM ancestor_ranked
     GROUP BY tgn_id
 )
@@ -516,11 +709,37 @@ SELECT
                             ELSE aa.ancestor_names[1:array_position(aa.ancestor_ids, 7029392)-1]
                         END,
                         ARRAY[]::text[]
-                    ) AS names
+                    ) AS names,
+                    COALESCE(
+                        CASE
+                            WHEN aa.ancestor_place_type_ids IS NULL THEN ARRAY[]::bigint[]
+                            WHEN array_position(aa.ancestor_ids, 7029392) IS NULL THEN aa.ancestor_place_type_ids
+                            WHEN array_position(aa.ancestor_ids, 7029392) = 1 THEN ARRAY[]::bigint[]
+                            ELSE aa.ancestor_place_type_ids[1:array_position(aa.ancestor_ids, 7029392)-1]
+                        END,
+                        ARRAY[]::bigint[]
+                    ) AS place_type_ids,
+                    COALESCE(
+                        CASE
+                            WHEN aa.ancestor_place_type_labels IS NULL THEN ARRAY[]::text[]
+                            WHEN array_position(aa.ancestor_ids, 7029392) IS NULL THEN aa.ancestor_place_type_labels
+                            WHEN array_position(aa.ancestor_ids, 7029392) = 1 THEN ARRAY[]::text[]
+                            ELSE aa.ancestor_place_type_labels[1:array_position(aa.ancestor_ids, 7029392)-1]
+                        END,
+                        ARRAY[]::text[]
+                    ) AS place_type_labels
             )
             SELECT COALESCE(
                 (
-                    SELECT jsonb_agg(jsonb_build_array(ids[idx], names[idx]) ORDER BY idx)
+                    SELECT jsonb_agg(
+                        jsonb_build_array(
+                            ids[idx],
+                            names[idx],
+                            place_type_ids[idx],
+                            place_type_labels[idx]
+                        )
+                        ORDER BY idx
+                    )
                     FROM trimmed, generate_subscripts(trimmed.ids, 1) AS idx
                 ),
                 '[]'::jsonb

@@ -56,7 +56,7 @@ Returns:
 - `score`
 - `parent_subject_id`
 - `lat`, `lon`
-- `ancestor_pairs` as tuple-like JSON arrays: `[[id, "label"], ...]` (traversal stops before ancestor `7029392`)
+- `ancestor_pairs` as tuple-like JSON arrays: `[[id, "label", place_type_id, "place_type_label"], ...]` (traversal stops before ancestor `7029392`)
 
 Function: `tgn.get_place_by_id(in_id bigint)`
 

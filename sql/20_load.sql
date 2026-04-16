@@ -436,10 +436,14 @@ ancestor_named AS (
         ad.ancestor_id,
         ad.min_depth,
         pt.preferred_term,
-        pt.preferred_term_norm
+        pt.preferred_term_norm,
+        ptc.place_type_id,
+        ptc.place_type_label
     FROM ancestor_dedup ad
     LEFT JOIN preferred_term pt
         ON pt.subject_id = ad.ancestor_id
+    LEFT JOIN place_type_choice ptc
+        ON ptc.subject_id = ad.ancestor_id
 ),
 ancestor_agg AS (
     SELECT
@@ -456,7 +460,9 @@ ancestor_agg AS (
             jsonb_agg(
                 jsonb_build_array(
                     an.ancestor_id,
-                    COALESCE(an.preferred_term, an.ancestor_id::text)
+                    COALESCE(an.preferred_term, an.ancestor_id::text),
+                    an.place_type_id,
+                    an.place_type_label
                 )
                 ORDER BY an.min_depth, an.ancestor_id
             ),
