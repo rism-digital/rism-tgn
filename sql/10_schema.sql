@@ -202,6 +202,35 @@ CREATE TABLE IF NOT EXISTS tgn.coordinates (
     lon_decimal_derived double precision
 );
 
+CREATE TABLE IF NOT EXISTS tgn.search_term (
+    term_id bigint PRIMARY KEY,
+    subject_id bigint NOT NULL,
+    matched_term text NOT NULL,
+    matched_term_norm text NOT NULL,
+    matched_term_clean text NOT NULL,
+    preferred_term text NOT NULL,
+    preferred_term_clean text NOT NULL,
+    term_type text,
+    preferred_flag text,
+    historic_flag text,
+    parent_subject_id bigint,
+    place_type_id bigint,
+    place_type_label text,
+    lat double precision,
+    lon double precision,
+    ancestor_blob text NOT NULL DEFAULT '',
+    ancestor_pairs jsonb NOT NULL DEFAULT '[]'::jsonb
+);
+
+CREATE TABLE IF NOT EXISTS tgn.search_term_index (
+    term_id bigint PRIMARY KEY,
+    subject_id bigint NOT NULL,
+    matched_term_norm text NOT NULL,
+    matched_term_clean text NOT NULL,
+    term_type text,
+    historic_flag text
+);
+
 CREATE INDEX IF NOT EXISTS term_subject_idx ON tgn.term (subject_id);
 CREATE INDEX IF NOT EXISTS term_norm_idx ON tgn.term (term_norm);
 CREATE INDEX IF NOT EXISTS term_norm_trgm_idx ON tgn.term USING gin (term_norm gin_trgm_ops);
@@ -251,3 +280,15 @@ CREATE INDEX IF NOT EXISTS place_type_rels_best_by_subject_idx
         rel_order,
         place_type_id
     );
+CREATE INDEX IF NOT EXISTS search_term_subject_idx ON tgn.search_term (subject_id);
+CREATE INDEX IF NOT EXISTS search_term_norm_idx ON tgn.search_term (matched_term_norm);
+CREATE INDEX IF NOT EXISTS search_term_norm_trgm_idx ON tgn.search_term USING gin (matched_term_norm gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS search_term_doc_idx
+    ON tgn.search_term
+    USING gin (to_tsvector('simple', matched_term_clean || ' ' || ancestor_blob));
+CREATE INDEX IF NOT EXISTS search_term_index_subject_idx ON tgn.search_term_index (subject_id);
+CREATE INDEX IF NOT EXISTS search_term_index_norm_idx ON tgn.search_term_index (matched_term_norm);
+CREATE INDEX IF NOT EXISTS search_term_index_norm_trgm_idx ON tgn.search_term_index USING gin (matched_term_norm gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS search_term_index_doc_idx
+    ON tgn.search_term_index
+    USING gin (to_tsvector('simple', matched_term_clean));

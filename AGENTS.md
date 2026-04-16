@@ -71,11 +71,13 @@ Notes:
 ## Performance Notes
 Important indexes are created in `sql/10_schema.sql`, including:
 - `tgn.term(term_norm)` and trigram GIN on `term_norm`
+- `tgn.search_term(matched_term_norm)` and trigram/full-text indexes for the query hot path
+- `tgn.search_term_index(matched_term_norm)` as the narrow candidate table for the query hot path
 - Preferred-term and hierarchy helper indexes
 - Coordinates first-row lookup index
 - Place-type relation index (`tgn.place_type_rels(subject_id, preferred_flag, rel_order, place_type_id)`)
 
-`sql/20_load.sql` runs `ANALYZE` on major tables at the end.
+`sql/20_load.sql` also rebuilds `tgn.search_term` and runs `ANALYZE` on major tables at the end.
 
 ## Safe Edit Rules For Future Agents
 - Keep ingest idempotent for full reloads.

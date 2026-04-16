@@ -6,7 +6,9 @@ TRUNCATE TABLE
     tgn.subject_merge,
     tgn.place_type,
     tgn.place_type_rels,
-    tgn.coordinates
+    tgn.coordinates,
+    tgn.search_term,
+    tgn.search_term_index
 RESTART IDENTITY;
 
 INSERT INTO tgn.subject (
@@ -310,8 +312,193 @@ ALTER TABLE tgn.coordinates
     ADD CONSTRAINT coordinates_subject_fk
     FOREIGN KEY (subject_id) REFERENCES tgn.subject(subject_id) ON DELETE CASCADE;
 
+INSERT INTO tgn.search_term_index (
+    term_id,
+    subject_id,
+    matched_term_norm,
+    matched_term_clean,
+    term_type,
+    historic_flag
+)
+SELECT
+    t.term_id,
+    t.subject_id,
+    t.term_norm AS matched_term_norm,
+    trim(regexp_replace(t.term_norm, '[^a-z0-9]+', ' ', 'g')) AS matched_term_clean,
+    t.term_type,
+    t.historic_flag
+FROM tgn.term t;
+
+INSERT INTO tgn.search_term (
+    term_id,
+    subject_id,
+    matched_term,
+    matched_term_norm,
+    matched_term_clean,
+    preferred_term,
+    preferred_term_clean,
+    term_type,
+    preferred_flag,
+    historic_flag,
+    parent_subject_id,
+    place_type_id,
+    place_type_label,
+    lat,
+    lon,
+    ancestor_blob,
+    ancestor_pairs
+)
+WITH RECURSIVE preferred_term AS (
+    SELECT DISTINCT ON (t.subject_id)
+        t.subject_id,
+        t.term_text AS preferred_term,
+        t.term_norm AS preferred_term_norm,
+        trim(regexp_replace(t.term_norm, '[^a-z0-9]+', ' ', 'g')) AS preferred_term_clean
+    FROM tgn.term t
+    ORDER BY
+        t.subject_id,
+        CASE WHEN btrim(COALESCE(t.term_type, '')) = 'P' THEN 0 ELSE 1 END,
+        t.display_order NULLS LAST,
+        t.term_id
+),
+parent_choice AS (
+    SELECT DISTINCT ON (sr.child_subject_id)
+        sr.child_subject_id AS subject_id,
+        sr.parent_subject_id
+    FROM tgn.subject_rels sr
+    WHERE sr.child_subject_id IS NOT NULL
+      AND sr.parent_subject_id IS NOT NULL
+    ORDER BY
+        sr.child_subject_id,
+        CASE WHEN btrim(COALESCE(sr.historic_flag, '')) = 'H' THEN 1 ELSE 0 END,
+        CASE WHEN btrim(COALESCE(sr.hierarchy_flag, '')) = 'P' THEN 0 ELSE 1 END,
+        CASE WHEN btrim(COALESCE(sr.preferred_flag, '')) = 'P' THEN 0 ELSE 1 END,
+        sr.subject_rel_id
+),
+place_type_choice AS (
+    SELECT DISTINCT ON (r.subject_id)
+        r.subject_id,
+        r.place_type_id,
+        pt.place_type_label
+    FROM tgn.place_type_rels r
+    LEFT JOIN tgn.place_type pt
+        ON pt.place_type_id = r.place_type_id
+    ORDER BY
+        r.subject_id,
+        CASE WHEN btrim(COALESCE(r.preferred_flag, '')) = 'P' THEN 0 ELSE 1 END,
+        r.rel_order NULLS LAST,
+        r.place_type_id
+),
+coord_choice AS (
+    SELECT DISTINCT ON (c.subject_id)
+        c.subject_id,
+        COALESCE(c.lat_decimal_derived, c.lat_decimal_raw) AS lat,
+        COALESCE(c.lon_decimal_derived, c.lon_decimal_raw) AS lon
+    FROM tgn.coordinates c
+    ORDER BY c.subject_id, c.coordinates_id
+),
+ancestors AS (
+    SELECT
+        pc.subject_id,
+        pc.parent_subject_id AS ancestor_id,
+        1 AS depth,
+        ARRAY[pc.subject_id, pc.parent_subject_id]::bigint[] AS path
+    FROM parent_choice pc
+    WHERE pc.parent_subject_id IS NOT NULL
+      AND pc.parent_subject_id <> 7029392
+
+    UNION ALL
+
+    SELECT
+        a.subject_id,
+        pc.parent_subject_id AS ancestor_id,
+        a.depth + 1 AS depth,
+        a.path || pc.parent_subject_id
+    FROM ancestors a
+    JOIN parent_choice pc
+        ON pc.subject_id = a.ancestor_id
+    WHERE pc.parent_subject_id IS NOT NULL
+      AND a.depth < 50
+      AND pc.parent_subject_id <> 7029392
+      AND NOT (pc.parent_subject_id = ANY(a.path))
+),
+ancestor_dedup AS (
+    SELECT
+        subject_id,
+        ancestor_id,
+        MIN(depth) AS min_depth
+    FROM ancestors
+    GROUP BY subject_id, ancestor_id
+),
+ancestor_named AS (
+    SELECT
+        ad.subject_id,
+        ad.ancestor_id,
+        ad.min_depth,
+        pt.preferred_term,
+        pt.preferred_term_norm
+    FROM ancestor_dedup ad
+    LEFT JOIN preferred_term pt
+        ON pt.subject_id = ad.ancestor_id
+),
+ancestor_agg AS (
+    SELECT
+        an.subject_id,
+        COALESCE(
+            string_agg(
+                COALESCE(an.preferred_term_norm, an.ancestor_id::text),
+                ' '
+                ORDER BY an.min_depth, an.ancestor_id
+            ),
+            ''
+        ) AS ancestor_blob,
+        COALESCE(
+            jsonb_agg(
+                jsonb_build_array(
+                    an.ancestor_id,
+                    COALESCE(an.preferred_term, an.ancestor_id::text)
+                )
+                ORDER BY an.min_depth, an.ancestor_id
+            ),
+            '[]'::jsonb
+        ) AS ancestor_pairs
+    FROM ancestor_named an
+    GROUP BY an.subject_id
+)
+SELECT
+    t.term_id,
+    t.subject_id,
+    t.term_text AS matched_term,
+    t.term_norm AS matched_term_norm,
+    trim(regexp_replace(t.term_norm, '[^a-z0-9]+', ' ', 'g')) AS matched_term_clean,
+    COALESCE(pt.preferred_term, t.term_text) AS preferred_term,
+    COALESCE(pt.preferred_term_clean, trim(regexp_replace(t.term_norm, '[^a-z0-9]+', ' ', 'g'))) AS preferred_term_clean,
+    t.term_type,
+    t.preferred_flag,
+    t.historic_flag,
+    pc.parent_subject_id,
+    ptc.place_type_id,
+    ptc.place_type_label,
+    cc.lat,
+    cc.lon,
+    COALESCE(aa.ancestor_blob, '') AS ancestor_blob,
+    COALESCE(aa.ancestor_pairs, '[]'::jsonb) AS ancestor_pairs
+FROM tgn.term t
+LEFT JOIN preferred_term pt
+    ON pt.subject_id = t.subject_id
+LEFT JOIN parent_choice pc
+    ON pc.subject_id = t.subject_id
+LEFT JOIN place_type_choice ptc
+    ON ptc.subject_id = t.subject_id
+LEFT JOIN coord_choice cc
+    ON cc.subject_id = t.subject_id
+LEFT JOIN ancestor_agg aa
+    ON aa.subject_id = t.subject_id;
+
 ANALYZE tgn.term;
 ANALYZE tgn.subject_rels;
 ANALYZE tgn.coordinates;
 ANALYZE tgn.place_type;
 ANALYZE tgn.place_type_rels;
+ANALYZE tgn.search_term;
+ANALYZE tgn.search_term_index;

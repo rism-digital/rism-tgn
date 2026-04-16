@@ -18,6 +18,8 @@ This package loads the selected Getty TGN REL files into PostgreSQL for place-na
 - Stage schema: `tgn_stage`
 - Final schema: `tgn`
 - Run tracking table: `tgn.import_run`
+- Search table: `tgn.search_term`
+- Search index table: `tgn.search_term_index`
 - Matching function: `tgn.match_place_name(name, context_parent_id, context_country_id, limit_n)`
 
 ## Requirements
@@ -58,8 +60,8 @@ FROM tgn.match_place_name('Alexandria', 7007567, NULL, 10);
 - Full reload behavior: each run truncates stage and final tables before load.
 - `TERM.out` has a known embedded-tab anomaly; parser canonicalizes it to 13 columns.
 - Coordinates are loaded raw plus derived decimal lat/lon columns.
-- Schema creation includes helper indexes for the matcher's repeated preferred-term,
-  parent-selection, and place-type lookup subqueries.
+- Ingest precomputes `tgn.search_term`, a denormalized search table with preferred-term,
+  hierarchy, place-type, coordinates, and ancestor metadata for the request hot path.
 - For an existing loaded database, `psql "$DATABASE_URL" -f sql/15_perf_indexes.sql`
   applies the same helper indexes with `CREATE INDEX CONCURRENTLY` and refreshes stats.
   The target database must already contain the loaded `tgn` schema.
