@@ -91,3 +91,4 @@ htmlcov/
 
 # pyenv
 # .python-version
+server/bin/georism

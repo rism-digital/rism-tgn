@@ -211,11 +211,31 @@ CREATE INDEX IF NOT EXISTS term_norm_cover_idx
 CREATE INDEX IF NOT EXISTS term_pref_by_subject_idx
     ON tgn.term (subject_id, display_order, term_id)
     WHERE preferred_flag = 'P';
+-- Match the preferred-term ORDER BY used by match_place_name/get_place_by_id so the
+-- planner can satisfy repeated subject-level lookups without an extra sort.
+CREATE INDEX IF NOT EXISTS term_best_by_subject_idx
+    ON tgn.term (
+        subject_id,
+        (CASE WHEN btrim(COALESCE(term_type, '')) = 'P' THEN 0 ELSE 1 END),
+        display_order,
+        term_id
+    )
+    INCLUDE (term_text, term_norm);
 CREATE INDEX IF NOT EXISTS language_rels_term_idx ON tgn.language_rels (term_id);
 CREATE INDEX IF NOT EXISTS subject_rels_parent_idx ON tgn.subject_rels (parent_subject_id);
 CREATE INDEX IF NOT EXISTS subject_rels_child_idx ON tgn.subject_rels (child_subject_id);
 CREATE INDEX IF NOT EXISTS subject_rels_child_pref_idx
     ON tgn.subject_rels (child_subject_id, preferred_flag, subject_rel_id)
+    INCLUDE (parent_subject_id);
+-- Match the parent-selection ORDER BY used throughout the recursive hierarchy walks.
+CREATE INDEX IF NOT EXISTS subject_rels_parent_choice_idx
+    ON tgn.subject_rels (
+        child_subject_id,
+        (CASE WHEN btrim(COALESCE(historic_flag, '')) = 'H' THEN 1 ELSE 0 END),
+        (CASE WHEN btrim(COALESCE(hierarchy_flag, '')) = 'P' THEN 0 ELSE 1 END),
+        (CASE WHEN btrim(COALESCE(preferred_flag, '')) = 'P' THEN 0 ELSE 1 END),
+        subject_rel_id
+    )
     INCLUDE (parent_subject_id);
 CREATE INDEX IF NOT EXISTS coordinates_subject_idx ON tgn.coordinates (subject_id);
 CREATE INDEX IF NOT EXISTS coordinates_subject_first_idx
@@ -224,3 +244,10 @@ CREATE INDEX IF NOT EXISTS coordinates_subject_first_idx
 CREATE INDEX IF NOT EXISTS coordinates_latlon_idx ON tgn.coordinates (lat_decimal_derived, lon_decimal_derived);
 CREATE INDEX IF NOT EXISTS place_type_label_idx ON tgn.place_type (place_type_label);
 CREATE INDEX IF NOT EXISTS place_type_rels_subject_idx ON tgn.place_type_rels (subject_id, preferred_flag, rel_order, place_type_id);
+CREATE INDEX IF NOT EXISTS place_type_rels_best_by_subject_idx
+    ON tgn.place_type_rels (
+        subject_id,
+        (CASE WHEN btrim(COALESCE(preferred_flag, '')) = 'P' THEN 0 ELSE 1 END),
+        rel_order,
+        place_type_id
+    );

@@ -87,16 +87,14 @@ type scanner interface {
 }
 
 func scanPlaceMatch(s scanner) (PlaceMatch, error) {
-	var (
-		item            PlaceMatch
-		placeTypeID     sql.NullInt64
-		placeTypeLabel  sql.NullString
-		score           sql.NullFloat64
-		parentSubjectID sql.NullInt64
-		lat             sql.NullFloat64
-		lon             sql.NullFloat64
-		ancestorPairs   []byte
-	)
+	var item PlaceMatch
+	var placeTypeID sql.NullInt64
+	var placeTypeLabel sql.NullString
+	var score sql.NullFloat64
+	var parentSubjectID sql.NullInt64
+	var lat sql.NullFloat64
+	var lon sql.NullFloat64
+	var ancestorPairs []byte
 
 	err := s.Scan(
 		&item.TGNID,
@@ -124,7 +122,7 @@ func scanPlaceMatch(s scanner) (PlaceMatch, error) {
 	if len(ancestorPairs) == 0 {
 		item.AncestorPairs = json.RawMessage("[]")
 	} else {
-		item.AncestorPairs = json.RawMessage(ancestorPairs)
+		item.AncestorPairs = ancestorPairs
 	}
 
 	return item, nil

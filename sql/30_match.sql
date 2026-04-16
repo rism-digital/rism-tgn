@@ -1,3 +1,30 @@
+CREATE INDEX IF NOT EXISTS term_best_by_subject_idx
+    ON tgn.term (
+        subject_id,
+        (CASE WHEN btrim(COALESCE(term_type, '')) = 'P' THEN 0 ELSE 1 END),
+        display_order,
+        term_id
+    )
+    INCLUDE (term_text, term_norm);
+
+CREATE INDEX IF NOT EXISTS subject_rels_parent_choice_idx
+    ON tgn.subject_rels (
+        child_subject_id,
+        (CASE WHEN btrim(COALESCE(historic_flag, '')) = 'H' THEN 1 ELSE 0 END),
+        (CASE WHEN btrim(COALESCE(hierarchy_flag, '')) = 'P' THEN 0 ELSE 1 END),
+        (CASE WHEN btrim(COALESCE(preferred_flag, '')) = 'P' THEN 0 ELSE 1 END),
+        subject_rel_id
+    )
+    INCLUDE (parent_subject_id);
+
+CREATE INDEX IF NOT EXISTS place_type_rels_best_by_subject_idx
+    ON tgn.place_type_rels (
+        subject_id,
+        (CASE WHEN btrim(COALESCE(preferred_flag, '')) = 'P' THEN 0 ELSE 1 END),
+        rel_order,
+        place_type_id
+    );
+
 DROP FUNCTION IF EXISTS tgn.match_place_name(text, bigint, bigint, integer);
 
 CREATE OR REPLACE FUNCTION tgn.match_place_name(

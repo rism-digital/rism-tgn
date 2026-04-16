@@ -58,3 +58,8 @@ FROM tgn.match_place_name('Alexandria', 7007567, NULL, 10);
 - Full reload behavior: each run truncates stage and final tables before load.
 - `TERM.out` has a known embedded-tab anomaly; parser canonicalizes it to 13 columns.
 - Coordinates are loaded raw plus derived decimal lat/lon columns.
+- Schema creation includes helper indexes for the matcher's repeated preferred-term,
+  parent-selection, and place-type lookup subqueries.
+- For an existing loaded database, `psql "$DATABASE_URL" -f sql/15_perf_indexes.sql`
+  applies the same helper indexes with `CREATE INDEX CONCURRENTLY` and refreshes stats.
+  The target database must already contain the loaded `tgn` schema.
