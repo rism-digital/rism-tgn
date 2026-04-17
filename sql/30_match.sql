@@ -337,7 +337,6 @@ ancestor_named AS (
         ad.ancestor_id,
         ad.min_depth,
         pt.term_text AS ancestor_name,
-        apt.place_type_id AS ancestor_place_type_id,
         apt.place_type_label AS ancestor_place_type_label
     FROM ancestor_dedup ad
     LEFT JOIN LATERAL (
@@ -371,7 +370,6 @@ ancestor_ranked AS (
         ancestor_id,
         min_depth,
         ancestor_name,
-        ancestor_place_type_id,
         ancestor_place_type_label,
         ROW_NUMBER() OVER (
             PARTITION BY tgn_id
@@ -384,7 +382,6 @@ ancestor_agg AS (
         tgn_id,
         ARRAY_AGG(ancestor_id ORDER BY min_depth, ancestor_id) AS ancestor_ids,
         ARRAY_AGG(COALESCE(ancestor_name, ancestor_id::text) ORDER BY min_depth, ancestor_id) AS ancestor_names,
-        ARRAY_AGG(ancestor_place_type_id ORDER BY min_depth, ancestor_id) AS ancestor_place_type_ids,
         ARRAY_AGG(ancestor_place_type_label ORDER BY min_depth, ancestor_id) AS ancestor_place_type_labels
     FROM ancestor_ranked
     GROUP BY tgn_id
@@ -423,15 +420,6 @@ SELECT
                     ) AS names,
                     COALESCE(
                         CASE
-                            WHEN aa.ancestor_place_type_ids IS NULL THEN ARRAY[]::bigint[]
-                            WHEN array_position(aa.ancestor_ids, 7029392) IS NULL THEN aa.ancestor_place_type_ids
-                            WHEN array_position(aa.ancestor_ids, 7029392) = 1 THEN ARRAY[]::bigint[]
-                            ELSE aa.ancestor_place_type_ids[1:array_position(aa.ancestor_ids, 7029392)-1]
-                        END,
-                        ARRAY[]::bigint[]
-                    ) AS place_type_ids,
-                    COALESCE(
-                        CASE
                             WHEN aa.ancestor_place_type_labels IS NULL THEN ARRAY[]::text[]
                             WHEN array_position(aa.ancestor_ids, 7029392) IS NULL THEN aa.ancestor_place_type_labels
                             WHEN array_position(aa.ancestor_ids, 7029392) = 1 THEN ARRAY[]::text[]
@@ -446,7 +434,6 @@ SELECT
                         jsonb_build_array(
                             ids[idx],
                             names[idx],
-                            place_type_ids[idx],
                             place_type_labels[idx]
                         )
                         ORDER BY idx
@@ -629,7 +616,6 @@ ancestor_named AS (
         ad.ancestor_id,
         ad.min_depth,
         name.term_text AS ancestor_name,
-        apt.place_type_id AS ancestor_place_type_id,
         apt.place_type_label AS ancestor_place_type_label
     FROM ancestor_dedup ad
     LEFT JOIN LATERAL (
@@ -662,7 +648,6 @@ ancestor_ranked AS (
         tgn_id,
         ancestor_id,
         ancestor_name,
-        ancestor_place_type_id,
         ancestor_place_type_label,
         min_depth,
         ROW_NUMBER() OVER (PARTITION BY tgn_id ORDER BY min_depth, ancestor_id) AS rn
@@ -673,7 +658,6 @@ ancestor_agg AS (
         tgn_id,
         ARRAY_AGG(ancestor_id ORDER BY min_depth, ancestor_id) AS ancestor_ids,
         ARRAY_AGG(COALESCE(ancestor_name, ancestor_id::text) ORDER BY min_depth, ancestor_id) AS ancestor_names,
-        ARRAY_AGG(ancestor_place_type_id ORDER BY min_depth, ancestor_id) AS ancestor_place_type_ids,
         ARRAY_AGG(ancestor_place_type_label ORDER BY min_depth, ancestor_id) AS ancestor_place_type_labels
     FROM ancestor_ranked
     GROUP BY tgn_id
@@ -712,15 +696,6 @@ SELECT
                     ) AS names,
                     COALESCE(
                         CASE
-                            WHEN aa.ancestor_place_type_ids IS NULL THEN ARRAY[]::bigint[]
-                            WHEN array_position(aa.ancestor_ids, 7029392) IS NULL THEN aa.ancestor_place_type_ids
-                            WHEN array_position(aa.ancestor_ids, 7029392) = 1 THEN ARRAY[]::bigint[]
-                            ELSE aa.ancestor_place_type_ids[1:array_position(aa.ancestor_ids, 7029392)-1]
-                        END,
-                        ARRAY[]::bigint[]
-                    ) AS place_type_ids,
-                    COALESCE(
-                        CASE
                             WHEN aa.ancestor_place_type_labels IS NULL THEN ARRAY[]::text[]
                             WHEN array_position(aa.ancestor_ids, 7029392) IS NULL THEN aa.ancestor_place_type_labels
                             WHEN array_position(aa.ancestor_ids, 7029392) = 1 THEN ARRAY[]::text[]
@@ -735,7 +710,6 @@ SELECT
                         jsonb_build_array(
                             ids[idx],
                             names[idx],
-                            place_type_ids[idx],
                             place_type_labels[idx]
                         )
                         ORDER BY idx

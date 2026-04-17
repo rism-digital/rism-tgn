@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"net/http"
 	"net/url"
 	"os"
@@ -74,7 +75,7 @@ func main() {
 		}
 		logger.Info().Msg("server stopped")
 	case err := <-errCh:
-		if err != nil && err != http.ErrServerClosed {
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error().Err(err).Msg("server failed")
 			os.Exit(1)
 		}
