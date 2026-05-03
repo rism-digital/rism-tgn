@@ -2,17 +2,23 @@ package georism
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 )
 
 type Handler struct {
-	repo Repository
+	repo           Repository
+	resultsPerPage int
 }
 
-func NewHandler(repo Repository) *Handler {
-	return &Handler{repo: repo}
+func NewHandler(repo Repository, resultsPerPage int) *Handler {
+	if resultsPerPage <= 0 {
+		resultsPerPage = 25
+	}
+	return &Handler{repo: repo, resultsPerPage: resultsPerPage}
 }
 
 type errorPayload struct {
@@ -25,7 +31,13 @@ type errorPayload struct {
 type searchResponse struct {
 	Query   string       `json:"query"`
 	Count   int          `json:"count"`
+	Page    pageLinks    `json:"page"`
 	Results []PlaceMatch `json:"results"`
+}
+
+type pageLinks struct {
+	Next     *string `json:"next"`
+	Previous *string `json:"previous"`
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -64,20 +76,29 @@ func (h *Handler) handlePlacesSearch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_params", "provide q for /places search")
 		return
 	}
-	h.handleSearch(w, q)
+	page, err := parsePage(r.URL.Query().Get("page"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_params", "page must be a positive integer")
+		return
+	}
+	h.handleSearch(w, r, q, page)
 }
 
-func (h *Handler) handleSearch(w http.ResponseWriter, q string) {
-	results, err := h.repo.SearchPlaces(q, 10)
+func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request, q string, page int) {
+	resultPage, err := h.repo.SearchPlaces(q, page, h.resultsPerPage)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", "search query failed")
 		return
 	}
 
 	writeJSON(w, http.StatusOK, searchResponse{
-		Query:   q,
-		Count:   len(results),
-		Results: results,
+		Query: q,
+		Count: resultPage.Total,
+		Page: pageLinks{
+			Next:     pageURL(r, page+1, h.resultsPerPage, resultPage.Total),
+			Previous: previousPageURL(r, page),
+		},
+		Results: resultPage.Results,
 	})
 }
 
@@ -112,4 +133,81 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 	payload.Error.Code = code
 	payload.Error.Message = message
 	writeJSON(w, status, payload)
+}
+
+func parsePage(raw string) (int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 1, nil
+	}
+	page, err := strconv.Atoi(raw)
+	if err != nil || page <= 0 {
+		return 0, strconv.ErrSyntax
+	}
+	return page, nil
+}
+
+func pageURL(r *http.Request, page int, pageSize int, total int) *string {
+	if page <= 0 || pageSize <= 0 || (page-1)*pageSize >= total {
+		return nil
+	}
+	return absolutePageURL(r, page)
+}
+
+func previousPageURL(r *http.Request, page int) *string {
+	if page <= 1 {
+		return nil
+	}
+	return absolutePageURL(r, page-1)
+}
+
+func absolutePageURL(r *http.Request, page int) *string {
+	if page <= 0 {
+		return nil
+	}
+	scheme := requestScheme(r)
+	host := r.Host
+	if host == "" {
+		host = "localhost"
+	}
+	u := url.URL{
+		Scheme:   scheme,
+		Host:     host,
+		Path:     r.URL.Path,
+		RawQuery: cloneQueryWithPage(r.URL.Query(), page).Encode(),
+	}
+	value := u.String()
+	return &value
+}
+
+func cloneQueryWithPage(values url.Values, page int) url.Values {
+	cloned := make(url.Values, len(values))
+	for key, current := range values {
+		copied := make([]string, len(current))
+		copy(copied, current)
+		cloned[key] = copied
+	}
+	cloned.Set("page", strconv.Itoa(page))
+	return cloned
+}
+
+func requestScheme(r *http.Request) string {
+	if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); forwarded != "" {
+		if idx := strings.IndexByte(forwarded, ','); idx >= 0 {
+			forwarded = forwarded[:idx]
+		}
+		forwarded = strings.TrimSpace(forwarded)
+		if forwarded != "" {
+			return forwarded
+		}
+	}
+	if r.TLS != nil {
+		return "https"
+	}
+	if host, _, err := net.SplitHostPort(r.Host); err == nil {
+		if host != "" {
+			return "http"
+		}
+	}
+	return "http"
 }
