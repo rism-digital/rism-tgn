@@ -1,0 +1,19 @@
+[server]
+addr = ":8080"
+
+[search]
+results_per_page = 25
+
+[indexer]
+solr_batch_size = 5000
+skip_place_type_labels = [
+    "streams", "creeks (bodies of water)", "valleys (landforms)", "lakes (bodies of water)",
+    "peaks (landforms)", "reservoirs (water distribution structures)", "springs (bodies of water)",
+    "mines (extracting complexes)", "bays (bodies of water)", "intermittent watercourses",
+    "forests (cultural landscapes)", "grazing areas", "coves (bodies of water)", "shoals (landforms)"
+]
+
+[solr]
+url = "http://localhost:8983/solr"
+live_core = "tgn_live"
+indexing_core = "tgn_indexing"

@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<config>
+    <luceneMatchVersion>9.12.2</luceneMatchVersion>
+    <dataDir>${solr.data.dir:}</dataDir>
+
+    <directoryFactory name="DirectoryFactory"
+                      class="${solr.directoryFactory:solr.NRTCachingDirectoryFactory}" />
+
+    <codecFactory class="solr.SchemaCodecFactory" />
+    <schemaFactory class="ClassicIndexSchemaFactory" />
+
+    <indexConfig>
+        <lockType>${solr.lock.type:native}</lockType>
+    </indexConfig>
+
+    <updateHandler class="solr.DirectUpdateHandler2">
+        <updateLog>
+            <str name="dir">${solr.ulog.dir:}</str>
+        </updateLog>
+        <autoCommit>
+            <maxTime>${solr.autoCommit.maxTime:60000}</maxTime>
+            <openSearcher>false</openSearcher>
+        </autoCommit>
+        <autoSoftCommit>
+            <maxTime>${solr.autoSoftCommit.maxTime:-1}</maxTime>
+        </autoSoftCommit>
+    </updateHandler>
+
+    <updateProcessor class="solr.TimestampUpdateProcessorFactory" name="auto-timestamp">
+        <str name="fieldName">indexed</str>
+    </updateProcessor>
+
+    <updateRequestProcessorChain name="process" default="true" processor="auto-timestamp">
+        <processor class="solr.TrimFieldUpdateProcessorFactory" />
+        <processor class="solr.LogUpdateProcessorFactory" />
+        <processor class="solr.RunUpdateProcessorFactory" />
+    </updateRequestProcessorChain>
+
+    <query>
+        <maxBooleanClauses>${solr.max.booleanClauses:1024}</maxBooleanClauses>
+        <filterCache class="solr.search.CaffeineCache"
+                     async="true"
+                     size="1024"
+                     initialSize="512"
+                     autowarmCount="64" />
+        <queryResultCache class="solr.search.CaffeineCache"
+                          async="true"
+                          size="1024"
+                          initialSize="512"
+                          autowarmCount="64" />
+        <cache name="perSegFilter"
+               class="solr.search.CaffeineCache"
+               size="10"
+               initialSize="0"
+               autowarmCount="10"
+               regenerator="solr.NoOpRegenerator" />
+        <enableLazyFieldLoading>true</enableLazyFieldLoading>
+        <useFilterForSortedQuery>true</useFilterForSortedQuery>
+        <queryResultWindowSize>50</queryResultWindowSize>
+        <queryResultMaxDocsCached>500</queryResultMaxDocsCached>
+        <useColdSearcher>true</useColdSearcher>
+    </query>
+
+    <requestDispatcher handleSelect="false">
+        <requestParsers multipartUploadLimitInKB="2048000"
+                        formdataUploadLimitInKB="2048"
+                        addHttpRequestToContext="false" />
+        <httpCaching never304="true" />
+    </requestDispatcher>
+
+    <requestHandler name="/get" class="solr.RealTimeGetHandler">
+        <lst name="defaults">
+            <str name="omitHeader">true</str>
+        </lst>
+    </requestHandler>
+
+    <requestHandler name="/select" class="solr.SearchHandler" />
+    <requestHandler name="/search" class="solr.SearchHandler" />
+
+    <initParams name="querySettings" path="/search,/select">
+        <lst name="defaults">
+            <str name="echoParams">explicit</str>
+            <int name="rows">25</int>
+            <str name="q.op">AND</str>
+            <str name="sow">true</str>
+            <str name="defType">edismax</str>
+            <str name="wt">json</str>
+            <str name="qf">text</str>
+        </lst>
+    </initParams>
+</config>

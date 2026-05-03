@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<schema name="tgn" version="1.7">
+    <field name="_version_" type="long" indexed="true" stored="true" />
+
+    <field name="id" type="string" required="true" multiValued="false" />
+    <field name="indexed" type="date" indexed="true" stored="true" />
+
+    <field name="type" type="string" indexed="true" stored="true" />
+    <field name="tgn_id" type="long" indexed="true" stored="true" />
+    <field name="preferred_term" type="string" indexed="true" stored="true" />
+    <field name="preferred_term_norm" type="string" indexed="true" stored="true" />
+    <field name="preferred_term_text" type="text_fulltext" indexed="true" stored="false" multiValued="true" />
+    <field name="matched_terms" type="string" indexed="false" stored="true" multiValued="true" />
+    <field name="alternate_names" type="string" indexed="false" stored="true" multiValued="true" />
+    <field name="alternate_names_text" type="text_fulltext" indexed="true" stored="false" multiValued="true" />
+    <field name="ancestor_pairs_json" type="json" indexed="false" stored="true" />
+    <field name="place_type_id" type="string" indexed="true" stored="true" />
+    <field name="place_type_label" type="string" indexed="true" stored="true" />
+    <field name="parent_subject_id" type="long" indexed="true" stored="true" />
+    <field name="lat" type="float" indexed="true" stored="true" />
+    <field name="lon" type="float" indexed="true" stored="true" />
+    <field name="location" type="location" indexed="true" stored="true" />
+    <field name="text" type="text_fulltext" indexed="true" stored="false" multiValued="true" />
+
+    <uniqueKey>id</uniqueKey>
+
+    <fieldType name="string" class="solr.StrField" indexed="true" stored="true" sortMissingLast="true" />
+    <fieldType name="long" class="solr.LongPointField" sortMissingLast="true" />
+    <fieldType name="float" class="solr.FloatPointField" sortMissingLast="true" />
+    <fieldType name="date" class="solr.DatePointField" sortMissingLast="true" />
+    <fieldType name="location" class="solr.LatLonPointSpatialField" stored="true" />
+    <fieldType name="json" class="solr.TextField" indexed="false" stored="true" docValues="false" />
+
+    <fieldType name="text_fulltext" class="solr.TextField" multiValued="true"  positionIncrementGap="100">
+        <analyzer type="index">
+            <tokenizer class="solr.ICUTokenizerFactory" />
+            <filter class="solr.ICUFoldingFilterFactory" />
+            <filter class="solr.WordDelimiterGraphFilterFactory" generateWordParts="1" generateNumberParts="1" catenateAll="1" splitOnCaseChange="1" preserveOriginal="0" />
+            <filter class="solr.FlattenGraphFilterFactory" />
+            <filter class="solr.FlattenGraphFilterFactory" />
+        </analyzer>
+        <analyzer type="query">
+            <tokenizer class="solr.ICUTokenizerFactory" />
+            <filter class="solr.ICUFoldingFilterFactory" />
+            <filter class="solr.WordDelimiterGraphFilterFactory" generateWordParts="1" generateNumberParts="1" catenateAll="1" splitOnCaseChange="1" preserveOriginal="0" />
+            <filter class="solr.FlattenGraphFilterFactory" />
+            <filter class="solr.FlattenGraphFilterFactory" />
+        </analyzer>
+    </fieldType>
+</schema>
