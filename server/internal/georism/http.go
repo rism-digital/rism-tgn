@@ -2,7 +2,6 @@ package georism
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -114,5 +113,3 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 	payload.Error.Message = message
 	writeJSON(w, status, payload)
 }
-
-var ErrNotFound = errors.New("not found")
