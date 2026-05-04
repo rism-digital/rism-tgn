@@ -17,12 +17,15 @@ import (
 
 func main() {
 	var (
-		inputDir = flag.String("input-dir", "", "Path to the Getty TGN JSON-LD pairtree root")
+		inputDir     = flag.String("input-dir", "", "Path to the extracted Getty TGN JSON-LD directory")
+		inputArchive = flag.String("input-archive", "", "Path to the Getty TGN JSON-LD tar.gz archive")
 	)
 	flag.Parse()
 
-	if *inputDir == "" {
-		fmt.Fprintln(os.Stderr, "usage: tgn-indexer --input-dir <dir>")
+	hasDir := *inputDir != ""
+	hasArchive := *inputArchive != ""
+	if hasDir == hasArchive {
+		fmt.Fprintln(os.Stderr, "usage: tgn-indexer (--input-dir <dir> | --input-archive <path.tar.gz>)")
 		os.Exit(2)
 	}
 
@@ -39,10 +42,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	logger.Info().Str("input_dir", *inputDir).Msg("building TGN index")
-	if err := georism.BuildSolrIndex(ctx, cfg, *inputDir); err != nil {
-		logger.Error().Err(err).Msg("index build failed")
-		os.Exit(1)
+	if hasDir {
+		logger.Info().Str("input_dir", *inputDir).Msg("building TGN index")
+		if err := georism.BuildSolrIndex(ctx, cfg, *inputDir); err != nil {
+			logger.Error().Err(err).Msg("index build failed")
+			os.Exit(1)
+		}
+	} else {
+		logger.Info().Str("input_archive", *inputArchive).Msg("building TGN index")
+		if err := georism.BuildSolrIndexFromArchive(ctx, cfg, *inputArchive); err != nil {
+			logger.Error().Err(err).Msg("index build failed")
+			os.Exit(1)
+		}
 	}
 	logger.Info().Msg("index build complete")
 }

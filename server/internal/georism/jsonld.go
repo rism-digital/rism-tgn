@@ -3,6 +3,7 @@ package georism
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -98,22 +99,26 @@ type placeSummary struct {
 }
 
 func parsePlaceFile(path string) (*parsedPlace, error) {
-	data, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("read place file %s: %w", path, err)
 	}
+	defer file.Close()
+	return parsePlace(file, path)
+}
 
+func parsePlace(r io.Reader, sourceName string) (*parsedPlace, error) {
 	var raw rawPlace
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, fmt.Errorf("decode place file %s: %w", path, err)
+	if err := json.NewDecoder(r).Decode(&raw); err != nil {
+		return nil, fmt.Errorf("decode place file %s: %w", sourceName, err)
 	}
 	if raw.Type != "Place" {
-		return nil, fmt.Errorf("unexpected record type %q in %s", raw.Type, path)
+		return nil, fmt.Errorf("unexpected record type %q in %s", raw.Type, sourceName)
 	}
 
 	id, err := parseGettyID(raw.ID)
 	if err != nil {
-		return nil, fmt.Errorf("parse place id from %s: %w", path, err)
+		return nil, fmt.Errorf("parse place id from %s: %w", sourceName, err)
 	}
 
 	place := &parsedPlace{TGNID: id}

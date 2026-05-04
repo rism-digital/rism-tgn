@@ -1,6 +1,8 @@
 package georism
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"io"
@@ -9,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -263,6 +266,24 @@ func TestParsePlaceFileAcceptsSingletonPartOfObject(t *testing.T) {
 	}
 }
 
+func TestParsePlaceFromReader(t *testing.T) {
+	place, err := parsePlace(strings.NewReader(`{
+  "id": "https://data.getty.edu/vocab/tgn/3000301",
+  "type": "Place",
+  "identified_by": [{"id": "http://vocab.getty.edu/tgn/term/1", "type": "Name", "content": "Reader Place", "classified_as": [{"id": "http://vocab.getty.edu/aat/300404670", "type": "Type"}]}],
+  "_label": "Reader Place"
+}`), "tgn/3000301.json")
+	if err != nil {
+		t.Fatalf("parsePlace returned error: %v", err)
+	}
+	if place.TGNID != 3000301 {
+		t.Fatalf("got id %d", place.TGNID)
+	}
+	if place.PreferredTerm != "Reader Place" {
+		t.Fatalf("got preferred term %q", place.PreferredTerm)
+	}
+}
+
 func TestBuildDocumentsSkipsConfiguredPlaceTypes(t *testing.T) {
 	root := t.TempDir()
 	streamPath := mustWritePairtreePlace(t, root, 3000201, `{
@@ -299,6 +320,64 @@ func TestBuildDocumentsSkipsConfiguredPlaceTypes(t *testing.T) {
 		t.Fatalf("buildDocuments returned error: %v", err)
 	}
 	if !reflect.DeepEqual(gotIDs, []int64{3000202}) {
+		t.Fatalf("got indexed ids %#v", gotIDs)
+	}
+}
+
+func TestArchiveIndexingSupportsFlatTGNLayout(t *testing.T) {
+	root := t.TempDir()
+	archivePath := filepath.Join(root, "tgn_linkedart.tar.gz")
+	mustWriteArchive(t, archivePath, map[string]string{
+		"tgn/3000401.json": `{
+  "id": "https://data.getty.edu/vocab/tgn/3000401",
+  "type": "Place",
+  "identified_by": [{"id": "http://vocab.getty.edu/tgn/term/1", "type": "Name", "content": "Archive Stream", "classified_as": [{"id": "http://vocab.getty.edu/aat/300404670", "type": "Type"}]}],
+  "classified_as": [{"id": "http://vocab.getty.edu/aat/300008835", "type": "Type", "_label": "streams", "classified_as": [{"id": "http://vocab.getty.edu/aat/300435109", "type": "Type"}]}],
+  "_label": "Archive Stream"
+}`,
+		"tgn/3000402.json": `{
+  "id": "https://data.getty.edu/vocab/tgn/3000402",
+  "type": "Place",
+  "identified_by": [{"id": "http://vocab.getty.edu/tgn/term/2", "type": "Name", "content": "Archive City", "classified_as": [{"id": "http://vocab.getty.edu/aat/300404670", "type": "Type"}]}],
+  "classified_as": [{"id": "http://vocab.getty.edu/aat/300008347", "type": "Type", "_label": "inhabited places", "classified_as": [{"id": "http://vocab.getty.edu/aat/300435109", "type": "Type"}]}],
+  "part_of": [{"id": "http://vocab.getty.edu/tgn/3000403", "type": "Place", "_label": "Archive County", "classified_as": [{"id": "http://vocab.getty.edu/aat/300449152", "type": "Type"}]}],
+  "_label": "Archive City"
+}`,
+		"tgn/3000403.json": `{
+  "id": "https://data.getty.edu/vocab/tgn/3000403",
+  "type": "Place",
+  "identified_by": [{"id": "http://vocab.getty.edu/tgn/term/3", "type": "Name", "content": "Archive County", "classified_as": [{"id": "http://vocab.getty.edu/aat/300404670", "type": "Type"}]}],
+  "classified_as": [{"id": "http://vocab.getty.edu/aat/300000776", "type": "Type", "_label": "counties", "classified_as": [{"id": "http://vocab.getty.edu/aat/300435109", "type": "Type"}]}],
+  "_label": "Archive County"
+}`,
+		"tgn/readme.txt": "ignore me",
+	})
+
+	builder := &indexBuilder{
+		summaryCache:        make(map[int64]placeSummary),
+		pathByID:            make(map[int64]string),
+		skippedPlaceTypeSet: makeSkipPlaceTypeSet([]string{"streams"}),
+	}
+	selection, err := builder.preloadArchiveSummaries(context.Background(), archivePath)
+	if err != nil {
+		t.Fatalf("preloadArchiveSummaries returned error: %v", err)
+	}
+	if len(selection.selectedEntryNames) != 3 {
+		t.Fatalf("got %d selected archive entries", len(selection.selectedEntryNames))
+	}
+	if builder.summaryCache[3000402].PreferredTerm != "Archive City" {
+		t.Fatalf("got preferred term %q", builder.summaryCache[3000402].PreferredTerm)
+	}
+
+	docCh, errCh := builder.buildDocumentsFromArchive(context.Background(), archivePath, selection)
+	var gotIDs []int64
+	for doc := range docCh {
+		gotIDs = append(gotIDs, doc.placeID)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("buildDocumentsFromArchive returned error: %v", err)
+	}
+	if !reflect.DeepEqual(gotIDs, []int64{3000402, 3000403}) {
 		t.Fatalf("got indexed ids %#v", gotIDs)
 	}
 }
@@ -485,3 +564,46 @@ func contains(items []string, want string) bool {
 
 func stringPtr(v string) *string { return &v }
 func int64Ptr(v int64) *int64    { return &v }
+
+func mustWriteArchive(t *testing.T, archivePath string, entries map[string]string) {
+	t.Helper()
+
+	file, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatalf("create archive: %v", err)
+	}
+	defer file.Close()
+
+	gzw := gzip.NewWriter(file)
+	defer gzw.Close()
+
+	tw := tar.NewWriter(gzw)
+	defer tw.Close()
+
+	dirHeader := &tar.Header{Name: "tgn/", Typeflag: tar.TypeDir, Mode: 0o755}
+	if err := tw.WriteHeader(dirHeader); err != nil {
+		t.Fatalf("write tar dir header: %v", err)
+	}
+
+	names := make([]string, 0, len(entries))
+	for name := range entries {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		body := entries[name]
+		header := &tar.Header{
+			Name:     name,
+			Typeflag: tar.TypeReg,
+			Mode:     0o644,
+			Size:     int64(len(body)),
+		}
+		if err := tw.WriteHeader(header); err != nil {
+			t.Fatalf("write tar header %s: %v", name, err)
+		}
+		if _, err := io.WriteString(tw, body); err != nil {
+			t.Fatalf("write tar body %s: %v", name, err)
+		}
+	}
+}

@@ -1,7 +1,9 @@
 package georism
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -84,8 +86,6 @@ func BuildSolrIndex(ctx context.Context, cfg Config, inputDir string) error {
 	if strings.TrimSpace(inputDir) == "" {
 		return fmt.Errorf("input dir is required")
 	}
-	startedAt := time.Now()
-
 	builder := &indexBuilder{
 		summaryCache:        make(map[int64]placeSummary),
 		pathByID:            make(map[int64]string),
@@ -101,7 +101,27 @@ func BuildSolrIndex(ctx context.Context, cfg Config, inputDir string) error {
 	if err != nil {
 		return err
 	}
+	return buildSolrIndexFromPlaces(ctx, cfg, builder, uniquePlaces)
+}
 
+func BuildSolrIndexFromArchive(ctx context.Context, cfg Config, archivePath string) error {
+	if strings.TrimSpace(archivePath) == "" {
+		return fmt.Errorf("input archive is required")
+	}
+	builder := &indexBuilder{
+		summaryCache:        make(map[int64]placeSummary),
+		pathByID:            make(map[int64]string),
+		skippedPlaceTypeSet: makeSkipPlaceTypeSet(cfg.Indexer.SkipPlaceTypeLabels),
+	}
+	selection, err := builder.preloadArchiveSummaries(ctx, archivePath)
+	if err != nil {
+		return err
+	}
+	return buildSolrIndexFromArchiveSelection(ctx, cfg, builder, archivePath, selection)
+}
+
+func buildSolrIndexFromPlaces(ctx context.Context, cfg Config, builder *indexBuilder, places []preloadedPlace) error {
+	startedAt := time.Now()
 	client := &http.Client{Timeout: 60 * time.Second}
 	admin := newSolrAdmin(client, cfg.Solr.URL)
 
@@ -118,7 +138,74 @@ func BuildSolrIndex(ctx context.Context, cfg Config, inputDir string) error {
 	indexedCount := 0
 	batchSize := cfg.Indexer.SolrBatchSize
 	batch := make([]solrPlaceDocument, 0, batchSize)
-	docs, errCh := builder.buildDocuments(ctx, uniquePlaces)
+	docs, errCh := builder.buildDocuments(ctx, places)
+	for result := range docs {
+		batch = append(batch, *result.doc)
+		indexedCount++
+		if indexedCount%progressLogEvery == 0 {
+			log.Info().
+				Str("elapsed", formatElapsedHHMMSS(time.Since(startedAt))).
+				Int("indexed_places", indexedCount).
+				Int("summary_places", len(builder.summaryCache)).
+				Str("last_id", strconv.FormatInt(result.placeID, 10)).
+				Msg("indexing progress")
+		}
+		if len(batch) >= batchSize {
+			if err := admin.postDocuments(ctx, cfg.Solr.IndexingCore, batch); err != nil {
+				return err
+			}
+			batch = batch[:0]
+		}
+	}
+	if err := <-errCh; err != nil {
+		return err
+	}
+	if len(batch) > 0 {
+		if err := admin.postDocuments(ctx, cfg.Solr.IndexingCore, batch); err != nil {
+			return err
+		}
+	}
+	if err := admin.commit(ctx, cfg.Solr.IndexingCore); err != nil {
+		return err
+	}
+	if err := admin.swapCores(ctx, cfg.Solr.IndexingCore, cfg.Solr.LiveCore); err != nil {
+		return err
+	}
+	if err := admin.commit(ctx, cfg.Solr.LiveCore); err != nil {
+		return err
+	}
+
+	log.Info().
+		Str("elapsed", formatElapsedHHMMSS(time.Since(startedAt))).
+		Int("indexed_places", indexedCount).
+		Int("summary_places", len(builder.summaryCache)).
+		Msg("index build complete")
+	return nil
+}
+
+type archiveSelection struct {
+	selectedEntryNames map[string]struct{}
+}
+
+func buildSolrIndexFromArchiveSelection(ctx context.Context, cfg Config, builder *indexBuilder, archivePath string, selection archiveSelection) error {
+	startedAt := time.Now()
+	client := &http.Client{Timeout: 60 * time.Second}
+	admin := newSolrAdmin(client, cfg.Solr.URL)
+
+	if err := admin.requireCore(ctx, cfg.Solr.LiveCore); err != nil {
+		return err
+	}
+	if err := admin.requireCore(ctx, cfg.Solr.IndexingCore); err != nil {
+		return err
+	}
+	if err := admin.clearCore(ctx, cfg.Solr.IndexingCore); err != nil {
+		return err
+	}
+
+	indexedCount := 0
+	batchSize := cfg.Indexer.SolrBatchSize
+	batch := make([]solrPlaceDocument, 0, batchSize)
+	docs, errCh := builder.buildDocumentsFromArchive(ctx, archivePath, selection)
 	for result := range docs {
 		batch = append(batch, *result.doc)
 		indexedCount++
@@ -402,6 +489,84 @@ func (b *indexBuilder) preloadSummaries(ctx context.Context, paths []string) ([]
 	}
 }
 
+func (b *indexBuilder) preloadArchiveSummaries(ctx context.Context, archivePath string) (archiveSelection, error) {
+	preloadStartedAt := time.Now()
+	resultCh := make(chan preloadedPlace, workerCount())
+	errCh := make(chan error, 1)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	go func() {
+		defer close(resultCh)
+		errCh <- scanArchiveJSONEntries(ctx, archivePath, func(entryName string, r io.Reader) error {
+			place, err := parsePlace(r, entryName)
+			if err != nil {
+				return err
+			}
+			result := preloadedPlace{
+				id:    place.TGNID,
+				path:  entryName,
+				place: place,
+				summary: placeSummary{
+					TGNID:           place.TGNID,
+					PreferredTerm:   place.PreferredTerm,
+					Terms:           uniqueTerms(place.Terms),
+					PlaceTypeID:     place.PlaceTypeID,
+					PlaceTypeLabel:  place.PlaceTypeLabel,
+					ParentSubjectID: place.ParentSubjectID,
+					ParentLabel:     place.ParentLabel,
+				},
+			}
+			select {
+			case resultCh <- result:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		})
+	}()
+
+	preloadedCount := 0
+	selectedNames := make(map[string]struct{})
+	for result := range resultCh {
+		if existingPath, ok := b.pathByID[result.id]; ok {
+			if result.path < existingPath {
+				log.Warn().
+					Int64("tgn_id", result.id).
+					Str("kept_path", result.path).
+					Str("skipped_path", existingPath).
+					Msg("duplicate place id in source archive; replacing duplicate file choice")
+				b.summaryCache[result.id] = result.summary
+				b.pathByID[result.id] = result.path
+				delete(selectedNames, existingPath)
+				selectedNames[result.path] = struct{}{}
+				continue
+			}
+			log.Warn().
+				Int64("tgn_id", result.id).
+				Str("kept_path", existingPath).
+				Str("skipped_path", result.path).
+				Msg("duplicate place id in source archive; skipping duplicate file")
+			continue
+		}
+		b.summaryCache[result.id] = result.summary
+		b.pathByID[result.id] = result.path
+		selectedNames[result.path] = struct{}{}
+		preloadedCount++
+		if preloadedCount%progressLogEvery == 0 {
+			log.Info().
+				Str("elapsed", formatElapsedHHMMSS(time.Since(preloadStartedAt))).
+				Int("preloaded_places", preloadedCount).
+				Str("last_id", strconv.FormatInt(result.id, 10)).
+				Msg("summary preload progress")
+		}
+	}
+	if err := <-errCh; err != nil {
+		return archiveSelection{}, err
+	}
+	return archiveSelection{selectedEntryNames: selectedNames}, nil
+}
+
 func (b *indexBuilder) buildDocuments(ctx context.Context, places []preloadedPlace) (<-chan builtDocument, <-chan error) {
 	docCh := make(chan builtDocument, workerCount())
 	errCh := make(chan error, 1)
@@ -459,6 +624,46 @@ func (b *indexBuilder) buildDocuments(ctx context.Context, places []preloadedPla
 		sendErr.Do(func() { errCh <- nil })
 		close(errCh)
 		cancel()
+	}()
+
+	return docCh, errCh
+}
+
+func (b *indexBuilder) buildDocumentsFromArchive(ctx context.Context, archivePath string, selection archiveSelection) (<-chan builtDocument, <-chan error) {
+	docCh := make(chan builtDocument, workerCount())
+	errCh := make(chan error, 1)
+	ctx, cancel := context.WithCancel(ctx)
+
+	go func() {
+		defer close(docCh)
+		defer close(errCh)
+		defer cancel()
+		errCh <- scanArchiveJSONEntries(ctx, archivePath, func(entryName string, r io.Reader) error {
+			if _, ok := selection.selectedEntryNames[entryName]; !ok {
+				return nil
+			}
+			place, err := parsePlace(r, entryName)
+			if err != nil {
+				return err
+			}
+			if b.shouldSkipPlace(place) {
+				return nil
+			}
+			ancestors, err := b.ancestorInfoFor(place.TGNID, map[int64]struct{}{place.TGNID: {}})
+			if err != nil {
+				return err
+			}
+			doc, err := newSolrPlaceDocument(place, ancestors)
+			if err != nil {
+				return err
+			}
+			select {
+			case docCh <- builtDocument{placeID: place.TGNID, doc: doc}:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		})
 	}()
 
 	return docCh, errCh
@@ -571,6 +776,46 @@ func listJSONFiles(ctx context.Context, inputDir string) ([]string, error) {
 		return nil, err
 	}
 	return paths, nil
+}
+
+func scanArchiveJSONEntries(ctx context.Context, archivePath string, fn func(entryName string, r io.Reader) error) error {
+	file, err := os.Open(archivePath)
+	if err != nil {
+		return fmt.Errorf("open archive %s: %w", archivePath, err)
+	}
+	defer file.Close()
+
+	gzr, err := gzip.NewReader(file)
+	if err != nil {
+		return fmt.Errorf("open gzip reader for %s: %w", archivePath, err)
+	}
+	defer gzr.Close()
+
+	tr := tar.NewReader(gzr)
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		header, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("read archive entry from %s: %w", archivePath, err)
+		}
+		if header == nil {
+			continue
+		}
+		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
+			continue
+		}
+		if filepath.Ext(header.Name) != ".json" {
+			continue
+		}
+		if err := fn(header.Name, tr); err != nil {
+			return err
+		}
+	}
 }
 
 func workerCount() int {
