@@ -33,7 +33,6 @@ type solrPlaceDocument struct {
 	Type               string   `json:"type"`
 	TGNID              int64    `json:"tgn_id"`
 	PreferredTerm      string   `json:"preferred_term"`
-	PreferredTermNorm  string   `json:"preferred_term_norm"`
 	PreferredTermText  []string `json:"preferred_term_text,omitempty"`
 	MatchedTerms       []string `json:"matched_terms"`
 	AlternateNames     []string `json:"alternate_names,omitempty"`
@@ -735,7 +734,6 @@ func newSolrPlaceDocument(place *parsedPlace, ancestors []ancestorInfo) (*solrPl
 		Type:               "place",
 		TGNID:              place.TGNID,
 		PreferredTerm:      place.PreferredTerm,
-		PreferredTermNorm:  normalizeText(place.PreferredTerm),
 		PreferredTermText:  []string{place.PreferredTerm},
 		MatchedTerms:       terms,
 		AlternateNames:     alternateNames,

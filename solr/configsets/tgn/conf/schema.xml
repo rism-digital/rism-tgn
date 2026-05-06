@@ -8,7 +8,6 @@
     <field name="type" type="string" indexed="true" stored="true" />
     <field name="tgn_id" type="long" indexed="true" stored="true" />
     <field name="preferred_term" type="string" indexed="true" stored="true" />
-    <field name="preferred_term_norm" type="string" indexed="true" stored="true" />
     <field name="preferred_term_text" type="text_fulltext" indexed="true" stored="false" multiValued="true" />
     <field name="matched_terms" type="string" indexed="false" stored="true" multiValued="true" />
     <field name="alternate_names" type="string" indexed="false" stored="true" multiValued="true" />

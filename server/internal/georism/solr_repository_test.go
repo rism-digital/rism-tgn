@@ -397,8 +397,26 @@ func TestSolrRepositorySearchPlacesRanksAncestorContextHigher(t *testing.T) {
 		if !strings.Contains(string(body), `"defType":"edismax"`) {
 			t.Fatalf("expected JSON query body, got %s", string(body))
 		}
-		if !strings.Contains(string(body), `"qf":"preferred_term_text^12 alternate_names_text^8 text^1"`) {
+		if !strings.Contains(string(body), `"q.op":"OR"`) {
+			t.Fatalf("expected OR main operator in query body, got %s", string(body))
+		}
+		if !strings.Contains(string(body), `"mm":"3\u003c75%"`) {
+			t.Fatalf("expected mm policy in query body, got %s", string(body))
+		}
+		if !strings.Contains(string(body), `"qf":"preferred_term_text^100 alternate_names_text^60 text^1"`) {
 			t.Fatalf("expected boosted qf fields in query body, got %s", string(body))
+		}
+		if !strings.Contains(string(body), `"pf":"preferred_term_text^200 alternate_names_text^120"`) {
+			t.Fatalf("expected boosted pf fields in query body, got %s", string(body))
+		}
+		if !strings.Contains(string(body), `"pf2":"preferred_term_text^80 alternate_names_text^48"`) {
+			t.Fatalf("expected boosted pf2 fields in query body, got %s", string(body))
+		}
+		if !strings.Contains(string(body), `"pf3":"preferred_term_text^40 alternate_names_text^24"`) {
+			t.Fatalf("expected boosted pf3 fields in query body, got %s", string(body))
+		}
+		if strings.Contains(string(body), `"bq":`) {
+			t.Fatalf("did not expect Go-built bq boost in query body, got %s", string(body))
 		}
 		if !strings.Contains(string(body), `"offset":25`) {
 			t.Fatalf("expected offset in query body, got %s", string(body))
@@ -418,7 +436,6 @@ func TestSolrRepositorySearchPlacesRanksAncestorContextHigher(t *testing.T) {
         "id": "3000202",
         "tgn_id": 3000202,
         "preferred_term": "Geneva",
-        "preferred_term_norm": "geneva",
         "matched_terms": ["Geneva"],
         "alternate_names": [],
         "ancestor_pairs_json": "[{\"tgn_id\":7000003,\"tgn_uri\":\"http://vocab.getty.edu/page/tgn/7000003\",\"label\":\"United States\",\"place_type_id\":null,\"place_type_label\":null}]",
@@ -428,7 +445,6 @@ func TestSolrRepositorySearchPlacesRanksAncestorContextHigher(t *testing.T) {
         "id": "3000201",
         "tgn_id": 3000201,
         "preferred_term": "Geneva",
-        "preferred_term_norm": "geneva",
         "matched_terms": ["Geneva"],
         "alternate_names": [],
         "ancestor_pairs_json": "[{\"tgn_id\":7000002,\"tgn_uri\":\"http://vocab.getty.edu/page/tgn/7000002\",\"label\":\"Switzerland\",\"place_type_id\":null,\"place_type_label\":null}]",
@@ -489,7 +505,6 @@ func TestSolrRepositoryGetPlaceByID(t *testing.T) {
       "id": "3000001",
       "tgn_id": 3000001,
       "preferred_term": "Sainte-Geneviève",
-      "preferred_term_norm": "sainte genevieve",
       "matched_terms": ["Sainte-Geneviève", "Ste Genevieve"],
       "alternate_names": ["Ste Genevieve"],
       "ancestor_pairs_json": "[{\"tgn_id\":3000002,\"tgn_uri\":\"http://vocab.getty.edu/page/tgn/3000002\",\"label\":\"Test County\",\"place_type_id\":\"http://vocab.getty.edu/aat/300000776\",\"place_type_label\":\"counties\"}]",

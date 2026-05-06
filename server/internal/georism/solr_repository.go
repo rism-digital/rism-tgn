@@ -18,14 +18,6 @@ type SolrRepository struct {
 	client  *http.Client
 }
 
-type solrStoredPlace struct {
-	TGNID         int64
-	PreferredTerm string
-	PreferredNorm string
-	MatchedTerms  []string
-	AncestorTerms []string
-}
-
 func OpenSolrRepository(cfg Config) (*SolrRepository, error) {
 	if cfg.Solr.URL == "" || cfg.Solr.LiveCore == "" {
 		return nil, fmt.Errorf("Solr config is incomplete")
@@ -48,14 +40,13 @@ func (r *SolrRepository) SearchPlaces(query string, page int, pageSize int) (Sea
 	if pageSize <= 0 {
 		pageSize = 25
 	}
-	norm := normalizeText(query)
 
 	requestBody := map[string]any{
 		"query":  query,
 		"offset": (page - 1) * pageSize,
 		"limit":  pageSize,
 		"fields": []string{
-			"id", "tgn_id", "preferred_term", "preferred_term_norm", "matched_terms",
+			"id", "tgn_id", "preferred_term", "matched_terms",
 			"alternate_names", "ancestor_pairs_json", "place_type_id", "place_type_label",
 			"parent_subject_id", "lat", "lon", "score",
 		},
@@ -63,15 +54,15 @@ func (r *SolrRepository) SearchPlaces(query string, page int, pageSize int) (Sea
 		"sort":   "score desc, preferred_term asc, tgn_id asc",
 		"params": map[string]any{
 			"defType":    "edismax",
-			"q.op":       "AND",
+			"q.op":       "OR",
+			"mm":         "3<75%",
 			"sow":        true,
-			"qf":         "preferred_term_text^12 alternate_names_text^8 text^1",
-			"pf":         "preferred_term_text^40 alternate_names_text^20",
+			"qf":         "preferred_term_text^100 alternate_names_text^60 text^1",
+			"pf":         "preferred_term_text^200 alternate_names_text^120",
+			"pf2":        "preferred_term_text^80 alternate_names_text^48",
+			"pf3":        "preferred_term_text^40 alternate_names_text^24",
 			"omitHeader": true,
 		},
-	}
-	if norm != "" {
-		requestBody["params"].(map[string]any)["bq"] = fmt.Sprintf(`preferred_term_norm:"%s"^100`, solrPhraseEscape(norm))
 	}
 
 	body, err := r.postQuery(ctxBackground(), requestBody)
@@ -91,7 +82,7 @@ func (r *SolrRepository) SearchPlaces(query string, page int, pageSize int) (Sea
 
 	results := make([]PlaceMatch, 0, len(resp.Response.Docs))
 	for _, doc := range resp.Response.Docs {
-		match, _, err := placeMatchFromSolrDoc(doc, norm, true)
+		match, err := placeMatchFromSolrDoc(doc, query, true)
 		if err != nil {
 			return SearchPage{}, err
 		}
@@ -105,7 +96,7 @@ func (r *SolrRepository) GetPlaceByID(id int64) (*PlaceMatch, error) {
 		"query": "*:*",
 		"limit": 1,
 		"fields": []string{
-			"id", "tgn_id", "preferred_term", "preferred_term_norm", "matched_terms",
+			"id", "tgn_id", "preferred_term", "matched_terms",
 			"alternate_names", "ancestor_pairs_json", "place_type_id", "place_type_label",
 			"parent_subject_id", "lat", "lon",
 		},
@@ -129,7 +120,7 @@ func (r *SolrRepository) GetPlaceByID(id int64) (*PlaceMatch, error) {
 	if len(resp.Response.Docs) == 0 {
 		return nil, nil
 	}
-	match, _, err := placeMatchFromSolrDoc(resp.Response.Docs[0], "", false)
+	match, err := placeMatchFromSolrDoc(resp.Response.Docs[0], "", false)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +150,7 @@ func (r *SolrRepository) postQuery(ctx context.Context, requestBody map[string]a
 	return respBody, nil
 }
 
-func placeMatchFromSolrDoc(doc map[string]any, normQuery string, includeScore bool) (PlaceMatch, *solrStoredPlace, error) {
+func placeMatchFromSolrDoc(doc map[string]any, query string, includeScore bool) (PlaceMatch, error) {
 	preferredTerm := stringFromDoc(doc, "preferred_term")
 	matchedTerms := stringSliceFromDoc(doc, "matched_terms")
 	if preferredTerm == "" {
@@ -171,7 +162,7 @@ func placeMatchFromSolrDoc(doc map[string]any, normQuery string, includeScore bo
 		TGNURI:        tgnPageURI(int64FromDoc(doc, "tgn_id")),
 		PreferredTerm: preferredTerm,
 	}
-	item.MatchedTerm = bestMatchedTerm(normQuery, preferredTerm, matchedTerms)
+	item.MatchedTerm = bestMatchedTerm(query, preferredTerm, matchedTerms)
 	item.AlternateNames = rawJSONFromStrings(stringSliceFromDoc(doc, "alternate_names"))
 	item.AncestorPairs = rawJSONFromDoc(doc, "ancestor_pairs_json", "[]")
 
@@ -194,15 +185,7 @@ func placeMatchFromSolrDoc(doc map[string]any, normQuery string, includeScore bo
 		score := float64FromDoc(doc, "score")
 		item.Score = &score
 	}
-
-	stored := &solrStoredPlace{
-		TGNID:         item.TGNID,
-		PreferredTerm: preferredTerm,
-		PreferredNorm: stringFromDoc(doc, "preferred_term_norm"),
-		MatchedTerms:  matchedTerms,
-		AncestorTerms: ancestorLabelsFromRaw(item.AncestorPairs),
-	}
-	return item, stored, nil
+	return item, nil
 }
 
 func alternateNamesSlice(preferredTerm string, terms []string) []string {
@@ -225,49 +208,6 @@ func alternateNamesSlice(preferredTerm string, terms []string) []string {
 	return alternates
 }
 
-func ancestorLabelsFromRaw(raw json.RawMessage) []string {
-	if len(raw) == 0 {
-		return nil
-	}
-	var objectPairs []map[string]any
-	if err := json.Unmarshal(raw, &objectPairs); err == nil {
-		labels := make([]string, 0, len(objectPairs))
-		for _, pair := range objectPairs {
-			label, ok := pair["label"].(string)
-			if !ok {
-				continue
-			}
-			label = strings.TrimSpace(label)
-			if label == "" {
-				continue
-			}
-			labels = append(labels, label)
-		}
-		return labels
-	}
-
-	var legacyPairs [][]any
-	if err := json.Unmarshal(raw, &legacyPairs); err != nil {
-		return nil
-	}
-	labels := make([]string, 0, len(legacyPairs))
-	for _, pair := range legacyPairs {
-		if len(pair) < 2 {
-			continue
-		}
-		label, ok := pair[1].(string)
-		if !ok {
-			continue
-		}
-		label = strings.TrimSpace(label)
-		if label == "" {
-			continue
-		}
-		labels = append(labels, label)
-	}
-	return labels
-}
-
 func rawJSONFromStrings(values []string) json.RawMessage {
 	if len(values) == 0 {
 		return json.RawMessage("[]")
@@ -279,15 +219,20 @@ func rawJSONFromStrings(values []string) json.RawMessage {
 	return json.RawMessage(raw)
 }
 
-func bestMatchedTerm(normQuery, preferredTerm string, terms []string) string {
-	if len(terms) == 0 || normQuery == "" {
+func bestMatchedTerm(query, preferredTerm string, terms []string) string {
+	if len(terms) == 0 {
 		return preferredTerm
 	}
+	trimmedQuery := strings.TrimSpace(query)
+	if trimmedQuery == "" {
+		return preferredTerm
+	}
+
+	queryLower := strings.ToLower(trimmedQuery)
 	bestTerm := preferredTerm
 	bestScore := -1
-	queryTokens := strings.Fields(normQuery)
 	for _, term := range terms {
-		score := matchScore(normQuery, queryTokens, term, preferredTerm)
+		score := matchScore(queryLower, term, preferredTerm)
 		if score > bestScore {
 			bestScore = score
 			bestTerm = term
@@ -299,21 +244,21 @@ func bestMatchedTerm(normQuery, preferredTerm string, terms []string) string {
 	return bestTerm
 }
 
-func matchScore(normQuery string, queryTokens []string, term string, preferredTerm string) int {
-	normTerm := normalizeText(term)
+func matchScore(queryLower string, term string, preferredTerm string) int {
+	trimmedTerm := strings.TrimSpace(term)
+	if trimmedTerm == "" {
+		return 0
+	}
+
+	termLower := strings.ToLower(trimmedTerm)
 	score := 0
 	switch {
-	case normTerm == normQuery:
+	case termLower == queryLower:
 		score += 1000
-	case strings.HasPrefix(normTerm, normQuery):
+	case strings.HasPrefix(termLower, queryLower):
 		score += 700
-	case strings.Contains(normTerm, normQuery):
+	case strings.Contains(termLower, queryLower):
 		score += 500
-	}
-	for _, token := range queryTokens {
-		if strings.Contains(normTerm, token) {
-			score += 100
-		}
 	}
 	if term == preferredTerm {
 		score += 25
@@ -321,83 +266,8 @@ func matchScore(normQuery string, queryTokens []string, term string, preferredTe
 	return score
 }
 
-func rerankScore(normQuery string, queryTokens []string, baseScore float64, match PlaceMatch, stored *solrStoredPlace) float64 {
-	score := baseScore
-	if stored == nil {
-		return score
-	}
-	matchedNorm := normalizeText(match.MatchedTerm)
-	preferredNorm := strings.TrimSpace(stored.PreferredNorm)
-	aliasText := " " + normalizeText(strings.Join(stored.MatchedTerms, " ")) + " "
-	ancestorText := " " + normalizeText(strings.Join(stored.AncestorTerms, " ")) + " "
-	firstToken := ""
-	if len(queryTokens) > 0 {
-		firstToken = queryTokens[0]
-	}
-
-	switch {
-	case matchedNorm == normQuery:
-		score += 20
-	case preferredNorm == normQuery:
-		score += 18
-	case strings.Contains(" "+preferredNorm+" ", " "+normQuery+" "):
-		score += 10
-	case strings.Contains(" "+matchedNorm+" ", " "+normQuery+" "):
-		score += 8
-	}
-
-	termHits := 0
-	ancestorHits := 0
-	coverageHits := 0
-	for _, token := range queryTokens {
-		inTerm := strings.Contains(" "+matchedNorm+" ", " "+token+" ") ||
-			strings.Contains(" "+preferredNorm+" ", " "+token+" ") ||
-			strings.Contains(aliasText, " "+token+" ")
-		inAncestor := strings.Contains(ancestorText, " "+token+" ")
-		if inTerm {
-			termHits++
-		}
-		if inAncestor {
-			ancestorHits++
-		}
-		if inTerm || inAncestor {
-			coverageHits++
-		}
-	}
-
-	if len(queryTokens) > 0 {
-		score += float64(termHits) * 3.5
-		score += float64(ancestorHits) * 5.0
-		score += float64(coverageHits) * 9.0
-		if firstToken != "" {
-			firstTokenInTerm := strings.Contains(" "+matchedNorm+" ", " "+firstToken+" ") ||
-				strings.Contains(" "+preferredNorm+" ", " "+firstToken+" ") ||
-				strings.Contains(aliasText, " "+firstToken+" ")
-			if firstTokenInTerm {
-				score += 9
-			} else {
-				score -= 9
-			}
-		}
-		if coverageHits == len(queryTokens) {
-			score += 15
-		}
-		if termHits == len(queryTokens) {
-			score += 8
-		}
-		score -= float64(len(queryTokens)-coverageHits) * 7.5
-	}
-
-	return score
-}
-
 func ctxBackground() context.Context {
 	return context.Background()
-}
-
-func solrPhraseEscape(input string) string {
-	replacer := strings.NewReplacer(`\`, `\\`, `"`, `\"`)
-	return replacer.Replace(input)
 }
 
 func stringFromDoc(doc map[string]any, key string) string {
