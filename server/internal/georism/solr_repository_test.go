@@ -80,6 +80,7 @@ func TestParsePlaceFile(t *testing.T) {
       "id": "http://vocab.getty.edu/tgn/term/1",
       "type": "Name",
       "content": "Sainte-Geneviève",
+	  "language": [{"_label": "fr"}],
       "classified_as": [
         {"id": "http://vocab.getty.edu/aat/300404650", "type": "Type", "_label": "names"},
         {"id": "http://vocab.getty.edu/aat/300404670", "type": "Type", "_label": "preferred term"}
@@ -89,6 +90,7 @@ func TestParsePlaceFile(t *testing.T) {
       "id": "http://vocab.getty.edu/tgn/term/2",
       "type": "Name",
       "content": "Ste Genevieve",
+	  "language": [{"_label": "en"}],
       "classified_as": [
         {"id": "http://vocab.getty.edu/aat/300404650", "type": "Type", "_label": "names"}
       ]
@@ -135,6 +137,12 @@ func TestParsePlaceFile(t *testing.T) {
 	if !reflect.DeepEqual(place.Terms, []string{"Sainte-Geneviève", "Ste Genevieve"}) {
 		t.Fatalf("got terms %#v", place.Terms)
 	}
+	if place.PreferredTermLanguage == nil || *place.PreferredTermLanguage != "fr" {
+		t.Fatalf("got preferred term language %v", place.PreferredTermLanguage)
+	}
+	if !reflect.DeepEqual(place.Names, []localizedName{{Name: "Sainte-Geneviève", Language: stringPtr("fr")}, {Name: "Ste Genevieve", Language: stringPtr("en")}}) {
+		t.Fatalf("got localized names %#v", place.Names)
+	}
 	if place.PlaceTypeID == nil || *place.PlaceTypeID != "http://vocab.getty.edu/aat/300008347" {
 		t.Fatalf("got place type id %v", place.PlaceTypeID)
 	}
@@ -146,8 +154,9 @@ func TestNewSolrPlaceDocumentIncludesAncestorMetadata(t *testing.T) {
   "id": "https://data.getty.edu/vocab/tgn/3000001",
   "type": "Place",
   "identified_by": [
-    {"id": "http://vocab.getty.edu/tgn/term/1", "type": "Name", "content": "Sainte-Geneviève", "classified_as": [{"id": "http://vocab.getty.edu/aat/300404670", "type": "Type"}]},
-    {"id": "http://vocab.getty.edu/tgn/term/2", "type": "Name", "content": "Ste Genevieve", "classified_as": [{"id": "http://vocab.getty.edu/aat/300404650", "type": "Type"}]},
+    {"id": "http://vocab.getty.edu/tgn/term/1", "type": "Name", "content": "Sainte-Geneviève", "language": [{"_label": "fr"}], "classified_as": [{"id": "http://vocab.getty.edu/aat/300404670", "type": "Type"}]},
+    {"id": "http://vocab.getty.edu/tgn/term/2", "type": "Name", "content": "Ste Genevieve", "language": [{"_label": "en"}], "classified_as": [{"id": "http://vocab.getty.edu/aat/300404650", "type": "Type"}]},
+    {"id": "http://vocab.getty.edu/tgn/term/3", "type": "Name", "content": "Sainte Genevieve", "classified_as": [{"id": "http://vocab.getty.edu/aat/300404650", "type": "Type"}]},
     {"id": "http://vocab.getty.edu/tgn/geometry/3000001", "type": "crm:E47_Spatial_Coordinates", "value": "[2.35,48.85]"}
   ],
   "classified_as": [{"id": "http://vocab.getty.edu/aat/300008347", "type": "Type", "_label": "inhabited places", "classified_as": [{"id": "http://vocab.getty.edu/aat/300435109", "type": "Type"}]}],
@@ -157,8 +166,8 @@ func TestNewSolrPlaceDocumentIncludesAncestorMetadata(t *testing.T) {
 
 	builder := &indexBuilder{
 		summaryCache: map[int64]placeSummary{
-			7000001: {TGNID: 7000001, PreferredTerm: "Region One", Terms: []string{"Region One", "Region 1"}, PlaceTypeID: stringPtr("http://vocab.getty.edu/aat/300387064"), PlaceTypeLabel: stringPtr("regions"), ParentSubjectID: int64Ptr(ancestorStopID), ParentLabel: stringPtr("World")},
-			3000002: {TGNID: 3000002, PreferredTerm: "Test County", Terms: []string{"Test County"}, PlaceTypeID: stringPtr("http://vocab.getty.edu/aat/300000776"), PlaceTypeLabel: stringPtr("counties"), ParentSubjectID: int64Ptr(7000001), ParentLabel: stringPtr("Region One")},
+			7000001: {TGNID: 7000001, PreferredTerm: "Region One", PreferredTermLanguage: stringPtr("en"), Terms: []string{"Region One", "Region 1"}, PlaceTypeID: stringPtr("http://vocab.getty.edu/aat/300387064"), PlaceTypeLabel: stringPtr("regions"), ParentSubjectID: int64Ptr(ancestorStopID), ParentLabel: stringPtr("World")},
+			3000002: {TGNID: 3000002, PreferredTerm: "Test County", PreferredTermLanguage: stringPtr("en"), Terms: []string{"Test County"}, PlaceTypeID: stringPtr("http://vocab.getty.edu/aat/300000776"), PlaceTypeLabel: stringPtr("counties"), ParentSubjectID: int64Ptr(7000001), ParentLabel: stringPtr("Region One")},
 			3000001: {TGNID: 3000001, PreferredTerm: "Sainte-Geneviève", Terms: []string{"Sainte-Geneviève", "Ste Genevieve"}, PlaceTypeID: stringPtr("http://vocab.getty.edu/aat/300008347"), PlaceTypeLabel: stringPtr("inhabited places"), ParentSubjectID: int64Ptr(3000002), ParentLabel: stringPtr("Test County")},
 		},
 		pathByID: map[int64]string{},
@@ -189,6 +198,7 @@ func TestNewSolrPlaceDocumentIncludesAncestorMetadata(t *testing.T) {
 			"tgn_id":           float64(3000002),
 			"tgn_uri":          "http://vocab.getty.edu/page/tgn/3000002",
 			"label":            "Test County",
+			"label_lang":       []any{"Test County", "en"},
 			"place_type_id":    "http://vocab.getty.edu/aat/300000776",
 			"place_type_label": "counties",
 		},
@@ -196,6 +206,7 @@ func TestNewSolrPlaceDocumentIncludesAncestorMetadata(t *testing.T) {
 			"tgn_id":           float64(7000001),
 			"tgn_uri":          "http://vocab.getty.edu/page/tgn/7000001",
 			"label":            "Region One",
+			"label_lang":       []any{"Region One", "en"},
 			"place_type_id":    "http://vocab.getty.edu/aat/300387064",
 			"place_type_label": "regions",
 		},
@@ -205,6 +216,12 @@ func TestNewSolrPlaceDocumentIncludesAncestorMetadata(t *testing.T) {
 	}
 	if !contains(doc.Text, "Region 1") {
 		t.Fatalf("expected ancestor alias in text: %#v", doc.Text)
+	}
+	if doc.LabelLang != `["Sainte-Geneviève","fr"]` {
+		t.Fatalf("got label language %s", doc.LabelLang)
+	}
+	if doc.AlternateNamesLanguages != `[{"name":"Ste Genevieve","language":"en"},{"name":"Sainte Genevieve","language":null}]` {
+		t.Fatalf("got alternate name languages %s", doc.AlternateNamesLanguages)
 	}
 }
 
@@ -506,7 +523,8 @@ func TestSolrRepositoryGetPlaceByID(t *testing.T) {
       "tgn_id": 3000001,
       "preferred_term": "Sainte-Geneviève",
       "matched_terms": ["Sainte-Geneviève", "Ste Genevieve"],
-      "alternate_names": ["Ste Genevieve"],
+	  "label_lang": "[\"Sainte-Geneviève\",\"fr\"]",
+      "alternate_names_languages": "[{\"name\":\"Ste Genevieve\",\"language\":\"en\"}]",
       "ancestor_pairs_json": "[{\"tgn_id\":3000002,\"tgn_uri\":\"http://vocab.getty.edu/page/tgn/3000002\",\"label\":\"Test County\",\"place_type_id\":\"http://vocab.getty.edu/aat/300000776\",\"place_type_label\":\"counties\"}]",
       "place_type_id": "http://vocab.getty.edu/aat/300008347",
       "place_type_label": "inhabited places",
@@ -550,6 +568,12 @@ func TestSolrRepositoryGetPlaceByID(t *testing.T) {
 	}
 	if !reflect.DeepEqual(altNames, []string{"Ste Genevieve"}) {
 		t.Fatalf("got alternate names %#v", altNames)
+	}
+	if string(item.LabelLang) != `["Sainte-Geneviève","fr"]` {
+		t.Fatalf("got label language %s", item.LabelLang)
+	}
+	if string(item.AlternateNamesLanguages) != `[{"name":"Ste Genevieve","language":"en"}]` {
+		t.Fatalf("got alternate name languages %s", item.AlternateNamesLanguages)
 	}
 }
 

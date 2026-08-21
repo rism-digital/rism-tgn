@@ -47,7 +47,7 @@ func (r *SolrRepository) SearchPlaces(query string, page int, pageSize int) (Sea
 		"limit":  pageSize,
 		"fields": []string{
 			"id", "tgn_id", "preferred_term", "matched_terms",
-			"alternate_names", "ancestor_pairs_json", "place_type_id", "place_type_label",
+			"label_lang", "alternate_names_languages", "ancestor_pairs_json", "place_type_id", "place_type_label",
 			"parent_subject_id", "lat", "lon", "score",
 		},
 		"filter": []string{"type:place"},
@@ -97,7 +97,7 @@ func (r *SolrRepository) GetPlaceByID(id int64) (*PlaceMatch, error) {
 		"limit": 1,
 		"fields": []string{
 			"id", "tgn_id", "preferred_term", "matched_terms",
-			"alternate_names", "ancestor_pairs_json", "place_type_id", "place_type_label",
+			"label_lang", "alternate_names_languages", "ancestor_pairs_json", "place_type_id", "place_type_label",
 			"parent_subject_id", "lat", "lon",
 		},
 		"filter": []string{fmt.Sprintf("id:%s", strconv.FormatInt(id, 10))},
@@ -163,7 +163,9 @@ func placeMatchFromSolrDoc(doc map[string]any, query string, includeScore bool) 
 		PreferredTerm: preferredTerm,
 	}
 	item.MatchedTerm = bestMatchedTerm(query, preferredTerm, matchedTerms)
-	item.AlternateNames = rawJSONFromStrings(stringSliceFromDoc(doc, "alternate_names"))
+	item.LabelLang = rawJSONFromDoc(doc, "label_lang", nameLanguagePairJSON(preferredTerm, nil))
+	item.AlternateNamesLanguages = rawJSONFromDoc(doc, "alternate_names_languages", "[]")
+	item.AlternateNames = alternateNamesFromLocalizedJSON(item.AlternateNamesLanguages)
 	item.AncestorPairs = rawJSONFromDoc(doc, "ancestor_pairs_json", "[]")
 
 	if v := strings.TrimSpace(stringFromDoc(doc, "place_type_id")); v != "" {
@@ -188,24 +190,28 @@ func placeMatchFromSolrDoc(doc map[string]any, query string, includeScore bool) 
 	return item, nil
 }
 
-func alternateNamesSlice(preferredTerm string, terms []string) []string {
-	if len(terms) == 0 {
-		return nil
+func nameLanguagePairJSON(name string, language *string) string {
+	pair, err := json.Marshal([]any{name, language})
+	if err != nil {
+		return "[\"\",null]"
 	}
-	alternates := make([]string, 0, len(terms))
-	seen := make(map[string]struct{}, len(terms))
-	for _, term := range terms {
-		trimmed := strings.TrimSpace(term)
-		if trimmed == "" || trimmed == preferredTerm {
-			continue
-		}
-		if _, ok := seen[trimmed]; ok {
-			continue
-		}
-		seen[trimmed] = struct{}{}
-		alternates = append(alternates, trimmed)
+	return string(pair)
+}
+
+func alternateNamesFromLocalizedJSON(raw json.RawMessage) json.RawMessage {
+	var names []struct {
+		Name string `json:"name"`
 	}
-	return alternates
+	if err := json.Unmarshal(raw, &names); err != nil {
+		return json.RawMessage("[]")
+	}
+	values := make([]string, 0, len(names))
+	for _, name := range names {
+		if trimmed := strings.TrimSpace(name.Name); trimmed != "" {
+			values = append(values, trimmed)
+		}
+	}
+	return rawJSONFromStrings(values)
 }
 
 func rawJSONFromStrings(values []string) json.RawMessage {

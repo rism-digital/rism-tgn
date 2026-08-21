@@ -35,6 +35,11 @@ type rawIdentifier struct {
 	Content      string              `json:"content"`
 	Value        string              `json:"value"`
 	ClassifiedAs []rawClassification `json:"classified_as"`
+	Language     []rawLanguage       `json:"language"`
+}
+
+type rawLanguage struct {
+	Label string `json:"_label"`
 }
 
 type rawClassification struct {
@@ -77,25 +82,33 @@ func (r *rawRelationList) UnmarshalJSON(data []byte) error {
 }
 
 type parsedPlace struct {
-	TGNID           int64
-	PreferredTerm   string
-	Terms           []string
-	PlaceTypeID     *string
-	PlaceTypeLabel  *string
-	ParentSubjectID *int64
-	ParentLabel     *string
-	Lat             *float64
-	Lon             *float64
+	TGNID                 int64
+	PreferredTerm         string
+	PreferredTermLanguage *string
+	Terms                 []string
+	Names                 []localizedName
+	PlaceTypeID           *string
+	PlaceTypeLabel        *string
+	ParentSubjectID       *int64
+	ParentLabel           *string
+	Lat                   *float64
+	Lon                   *float64
+}
+
+type localizedName struct {
+	Name     string  `json:"name"`
+	Language *string `json:"language"`
 }
 
 type placeSummary struct {
-	TGNID           int64
-	PreferredTerm   string
-	Terms           []string
-	PlaceTypeID     *string
-	PlaceTypeLabel  *string
-	ParentSubjectID *int64
-	ParentLabel     *string
+	TGNID                 int64
+	PreferredTerm         string
+	PreferredTermLanguage *string
+	Terms                 []string
+	PlaceTypeID           *string
+	PlaceTypeLabel        *string
+	ParentSubjectID       *int64
+	ParentLabel           *string
 }
 
 func parsePlaceFile(path string) (*parsedPlace, error) {
@@ -122,7 +135,8 @@ func parsePlace(r io.Reader, sourceName string) (*parsedPlace, error) {
 	}
 
 	place := &parsedPlace{TGNID: id}
-	place.Terms, place.PreferredTerm = extractTerms(raw)
+	place.Names, place.PreferredTerm, place.PreferredTermLanguage = extractTerms(raw)
+	place.Terms = localizedNameStrings(place.Names)
 	place.PlaceTypeID, place.PlaceTypeLabel = extractPlaceType(raw.ClassifiedAs)
 	place.ParentSubjectID, place.ParentLabel = extractPreferredParent(raw.PartOf)
 	place.Lat, place.Lon = extractCoordinates(raw.IdentifiedBy)
@@ -130,12 +144,13 @@ func parsePlace(r io.Reader, sourceName string) (*parsedPlace, error) {
 	return place, nil
 }
 
-func extractTerms(raw rawPlace) ([]string, string) {
+func extractTerms(raw rawPlace) ([]localizedName, string, *string) {
 	seen := make(map[string]struct{})
-	terms := make([]string, 0, len(raw.IdentifiedBy)+1)
+	terms := make([]localizedName, 0, len(raw.IdentifiedBy)+1)
 	preferred := ""
+	var preferredLanguage *string
 
-	addTerm := func(term string) {
+	addTerm := func(term string, language *string) {
 		term = strings.TrimSpace(term)
 		if term == "" {
 			return
@@ -144,37 +159,64 @@ func extractTerms(raw rawPlace) ([]string, string) {
 			return
 		}
 		seen[term] = struct{}{}
-		terms = append(terms, term)
+		terms = append(terms, localizedName{Name: term, Language: language})
 	}
 
 	for _, ident := range raw.IdentifiedBy {
 		if ident.Type != "Name" || strings.TrimSpace(ident.Content) == "" {
 			continue
 		}
-		addTerm(ident.Content)
+		language := identifierLanguage(ident)
+		addTerm(ident.Content, language)
 		if preferred == "" && hasClassification(ident.ClassifiedAs, preferredTermTypeID) {
 			preferred = strings.TrimSpace(ident.Content)
+			preferredLanguage = language
 		}
 	}
 
 	if preferred == "" {
 		switch {
 		case len(terms) > 0:
-			preferred = terms[0]
+			preferred = terms[0].Name
 		case strings.TrimSpace(raw.Label) != "":
 			preferred = strings.TrimSpace(raw.Label)
-			addTerm(preferred)
+			addTerm(preferred, nil)
 		default:
 			preferred = strconv.FormatInt(mustPlaceID(raw.ID), 10)
-			addTerm(preferred)
+			addTerm(preferred, nil)
 		}
 	}
 
 	if len(terms) == 0 {
-		addTerm(preferred)
+		addTerm(preferred, nil)
+	}
+	if preferredLanguage == nil {
+		for _, term := range terms {
+			if term.Name == preferred {
+				preferredLanguage = term.Language
+				break
+			}
+		}
 	}
 
-	return terms, preferred
+	return terms, preferred, preferredLanguage
+}
+
+func identifierLanguage(ident rawIdentifier) *string {
+	for _, language := range ident.Language {
+		if tag := strings.TrimSpace(language.Label); tag != "" {
+			return &tag
+		}
+	}
+	return nil
+}
+
+func localizedNameStrings(names []localizedName) []string {
+	terms := make([]string, 0, len(names))
+	for _, name := range names {
+		terms = append(terms, name.Name)
+	}
+	return terms
 }
 
 func extractPlaceType(classes []rawClassification) (*string, *string) {

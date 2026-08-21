@@ -28,23 +28,24 @@ const (
 )
 
 type solrPlaceDocument struct {
-	ID                 string   `json:"id"`
-	IndexedAt          string   `json:"indexed,omitempty"`
-	Type               string   `json:"type"`
-	TGNID              int64    `json:"tgn_id"`
-	PreferredTerm      string   `json:"preferred_term"`
-	PreferredTermText  []string `json:"preferred_term_text,omitempty"`
-	MatchedTerms       []string `json:"matched_terms"`
-	AlternateNames     []string `json:"alternate_names,omitempty"`
-	AlternateNamesText []string `json:"alternate_names_text,omitempty"`
-	AncestorPairs      string   `json:"ancestor_pairs_json"`
-	PlaceTypeID        *string  `json:"place_type_id,omitempty"`
-	PlaceTypeLabel     *string  `json:"place_type_label,omitempty"`
-	ParentSubjectID    *int64   `json:"parent_subject_id,omitempty"`
-	Lat                *float64 `json:"lat,omitempty"`
-	Lon                *float64 `json:"lon,omitempty"`
-	Location           *string  `json:"location,omitempty"`
-	Text               []string `json:"text,omitempty"`
+	ID                      string   `json:"id"`
+	IndexedAt               string   `json:"indexed,omitempty"`
+	Type                    string   `json:"type"`
+	TGNID                   int64    `json:"tgn_id"`
+	PreferredTerm           string   `json:"preferred_term"`
+	LabelLang               string   `json:"label_lang"`
+	PreferredTermText       []string `json:"preferred_term_text,omitempty"`
+	MatchedTerms            []string `json:"matched_terms"`
+	AlternateNamesLanguages string   `json:"alternate_names_languages,omitempty"`
+	AlternateNamesText      []string `json:"alternate_names_text,omitempty"`
+	AncestorPairs           string   `json:"ancestor_pairs_json"`
+	PlaceTypeID             *string  `json:"place_type_id,omitempty"`
+	PlaceTypeLabel          *string  `json:"place_type_label,omitempty"`
+	ParentSubjectID         *int64   `json:"parent_subject_id,omitempty"`
+	Lat                     *float64 `json:"lat,omitempty"`
+	Lon                     *float64 `json:"lon,omitempty"`
+	Location                *string  `json:"location,omitempty"`
+	Text                    []string `json:"text,omitempty"`
 }
 
 type indexBuilder struct {
@@ -56,6 +57,7 @@ type indexBuilder struct {
 type ancestorInfo struct {
 	ID             int64
 	Label          string
+	LabelLanguage  *string
 	Terms          []string
 	PlaceTypeID    *string
 	PlaceTypeLabel *string
@@ -77,6 +79,7 @@ type ancestorPairDocument struct {
 	TGNID          int64   `json:"tgn_id"`
 	TGNURI         string  `json:"tgn_uri"`
 	Label          string  `json:"label"`
+	LabelLang      []any   `json:"label_lang"`
 	PlaceTypeID    *string `json:"place_type_id,omitempty"`
 	PlaceTypeLabel *string `json:"place_type_label,omitempty"`
 }
@@ -406,13 +409,14 @@ func (b *indexBuilder) preloadSummaries(ctx context.Context, paths []string) ([]
 					path:  path,
 					place: place,
 					summary: placeSummary{
-						TGNID:           place.TGNID,
-						PreferredTerm:   place.PreferredTerm,
-						Terms:           uniqueTerms(place.Terms),
-						PlaceTypeID:     place.PlaceTypeID,
-						PlaceTypeLabel:  place.PlaceTypeLabel,
-						ParentSubjectID: place.ParentSubjectID,
-						ParentLabel:     place.ParentLabel,
+						TGNID:                 place.TGNID,
+						PreferredTerm:         place.PreferredTerm,
+						PreferredTermLanguage: place.PreferredTermLanguage,
+						Terms:                 uniqueTerms(place.Terms),
+						PlaceTypeID:           place.PlaceTypeID,
+						PlaceTypeLabel:        place.PlaceTypeLabel,
+						ParentSubjectID:       place.ParentSubjectID,
+						ParentLabel:           place.ParentLabel,
 					},
 				}
 				select {
@@ -507,13 +511,14 @@ func (b *indexBuilder) preloadArchiveSummaries(ctx context.Context, archivePath 
 				path:  entryName,
 				place: place,
 				summary: placeSummary{
-					TGNID:           place.TGNID,
-					PreferredTerm:   place.PreferredTerm,
-					Terms:           uniqueTerms(place.Terms),
-					PlaceTypeID:     place.PlaceTypeID,
-					PlaceTypeLabel:  place.PlaceTypeLabel,
-					ParentSubjectID: place.ParentSubjectID,
-					ParentLabel:     place.ParentLabel,
+					TGNID:                 place.TGNID,
+					PreferredTerm:         place.PreferredTerm,
+					PreferredTermLanguage: place.PreferredTermLanguage,
+					Terms:                 uniqueTerms(place.Terms),
+					PlaceTypeID:           place.PlaceTypeID,
+					PlaceTypeLabel:        place.PlaceTypeLabel,
+					ParentSubjectID:       place.ParentSubjectID,
+					ParentLabel:           place.ParentLabel,
 				},
 			}
 			select {
@@ -704,7 +709,7 @@ func formatElapsedHHMMSS(elapsed time.Duration) string {
 
 func newSolrPlaceDocument(place *parsedPlace, ancestors []ancestorInfo) (*solrPlaceDocument, error) {
 	terms := uniqueTerms(place.Terms)
-	alternateNames := alternateNamesSlice(place.PreferredTerm, terms)
+	alternateNames := alternateLocalizedNames(place.PreferredTerm, place.Names)
 	ancestorPairs := make([]ancestorPairDocument, 0, len(ancestors))
 	ancestorTerms := make([]string, 0, len(ancestors)*2)
 	for _, ancestor := range ancestors {
@@ -712,6 +717,7 @@ func newSolrPlaceDocument(place *parsedPlace, ancestors []ancestorInfo) (*solrPl
 			TGNID:          ancestor.ID,
 			TGNURI:         tgnPageURI(ancestor.ID),
 			Label:          ancestor.Label,
+			LabelLang:      nameLanguagePair(ancestor.Label, ancestor.LabelLanguage),
 			PlaceTypeID:    ancestor.PlaceTypeID,
 			PlaceTypeLabel: ancestor.PlaceTypeLabel,
 		})
@@ -720,6 +726,14 @@ func newSolrPlaceDocument(place *parsedPlace, ancestors []ancestorInfo) (*solrPl
 	ancestorPairsJSON, err := json.Marshal(ancestorPairs)
 	if err != nil {
 		return nil, fmt.Errorf("encode ancestors for %d: %w", place.TGNID, err)
+	}
+	labelLangJSON, err := json.Marshal(nameLanguagePair(place.PreferredTerm, place.PreferredTermLanguage))
+	if err != nil {
+		return nil, fmt.Errorf("encode label language for %d: %w", place.TGNID, err)
+	}
+	alternateNamesJSON, err := json.Marshal(alternateNames)
+	if err != nil {
+		return nil, fmt.Errorf("encode alternate names for %d: %w", place.TGNID, err)
 	}
 
 	textTerms := uniqueTerms(append(append([]string{}, terms...), ancestorTerms...))
@@ -730,23 +744,46 @@ func newSolrPlaceDocument(place *parsedPlace, ancestors []ancestorInfo) (*solrPl
 	}
 
 	return &solrPlaceDocument{
-		ID:                 strconv.FormatInt(place.TGNID, 10),
-		Type:               "place",
-		TGNID:              place.TGNID,
-		PreferredTerm:      place.PreferredTerm,
-		PreferredTermText:  []string{place.PreferredTerm},
-		MatchedTerms:       terms,
-		AlternateNames:     alternateNames,
-		AlternateNamesText: alternateNames,
-		AncestorPairs:      string(ancestorPairsJSON),
-		PlaceTypeID:        place.PlaceTypeID,
-		PlaceTypeLabel:     place.PlaceTypeLabel,
-		ParentSubjectID:    place.ParentSubjectID,
-		Lat:                place.Lat,
-		Lon:                place.Lon,
-		Location:           location,
-		Text:               textTerms,
+		ID:                      strconv.FormatInt(place.TGNID, 10),
+		Type:                    "place",
+		TGNID:                   place.TGNID,
+		PreferredTerm:           place.PreferredTerm,
+		LabelLang:               string(labelLangJSON),
+		PreferredTermText:       []string{place.PreferredTerm},
+		MatchedTerms:            terms,
+		AlternateNamesLanguages: string(alternateNamesJSON),
+		AlternateNamesText:      localizedNameStrings(alternateNames),
+		AncestorPairs:           string(ancestorPairsJSON),
+		PlaceTypeID:             place.PlaceTypeID,
+		PlaceTypeLabel:          place.PlaceTypeLabel,
+		ParentSubjectID:         place.ParentSubjectID,
+		Lat:                     place.Lat,
+		Lon:                     place.Lon,
+		Location:                location,
+		Text:                    textTerms,
 	}, nil
+}
+
+func nameLanguagePair(name string, language *string) []any {
+	return []any{name, language}
+}
+
+func alternateLocalizedNames(preferredTerm string, names []localizedName) []localizedName {
+	alternates := make([]localizedName, 0, len(names))
+	seen := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		trimmed := strings.TrimSpace(name.Name)
+		if trimmed == "" || trimmed == preferredTerm {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		name.Name = trimmed
+		alternates = append(alternates, name)
+	}
+	return alternates
 }
 
 func tgnPageURI(id int64) string {
@@ -883,6 +920,7 @@ func (b *indexBuilder) ancestorInfoFor(id int64, path map[int64]struct{}) ([]anc
 	ancestors := []ancestorInfo{{
 		ID:             parentID,
 		Label:          parentSummary.PreferredTerm,
+		LabelLanguage:  parentSummary.PreferredTermLanguage,
 		Terms:          uniqueTerms(parentSummary.Terms),
 		PlaceTypeID:    parentSummary.PlaceTypeID,
 		PlaceTypeLabel: parentSummary.PlaceTypeLabel,
